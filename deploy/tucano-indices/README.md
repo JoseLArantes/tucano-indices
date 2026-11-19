@@ -34,6 +34,22 @@ O chart executa migrations como hook `pre-install,pre-upgrade`, inicia duas rép
 
 A API fica disponível pelo Service ClusterIP na porta 8080. Ingress é opcional e pode ser habilitado em `ingress`; configure também `config.APP_PUBLIC_URL` para o endereço externo real.
 
+### BeakCloud e Project Contour
+
+A integração específica do BeakCloud está ativa por padrão: ela cria um recurso `HTTPProxy` do Contour e um `Certificate` do cert-manager no namespace da release Helm. Instale/atualize o chart no namespace do serviço com:
+
+```sh
+helm upgrade --install tucano-indices ./deploy/tucano-indices \
+  --namespace tucano-services \
+  --reuse-values \
+  --set beakcloud.enabled=true \
+  --set config.APP_PUBLIC_URL='https://tucano-indices.beakcloud.com'
+```
+
+O bloco `beakcloud` em `values.yaml` controla o domínio, a classe `contour`, o `ClusterIssuer`, o Secret TLS e o destino da rota. Requeridos no cluster: CRDs do Project Contour e cert-manager, além do `ClusterIssuer` indicado. Para usar um certificado/Secret já existente, configure `beakcloud.certificate.create=false` e informe seu nome em `beakcloud.certificate.secretName`. Em clusters sem Contour/cert-manager, desative a integração com `--set beakcloud.enabled=false`.
+
+Use a integração BeakCloud **ou** `ingress` para um mesmo domínio; não crie os dois recursos apontando para o mesmo FQDN.
+
 ## Versionamento da imagem
 
 `Chart.yaml` começa na versão `1.0.0`. O release-please atualiza `version` e `appVersion` do chart junto com a versão do projeto. O workflow de publicação cria a tag sem prefixo `v` no GHCR, e o chart usa `appVersion` automaticamente para escolher a tag da imagem. Um override explícito permanece possível através de `image.tag`.

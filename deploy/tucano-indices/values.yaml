@@ -82,3 +82,25 @@ autoscaling:
   minReplicas: 2
   maxReplicas: 10
   targetCPUUtilizationPercentage: 80
+
+## specific setps for setting service on beakcloud
+beakcloud:
+  enabled: true
+  fqdn: tucano-indices.beakcloud.com
+  ingressClassName: contour
+  certificate:
+    create: true
+    name: ""
+    secretName: ""
+    issuerRef:
+      name: letsencrypt-prod
+      kind: ClusterIssuer
+      group: cert-manager.io
+  tls:
+    minimumProtocolVersion: "1.2"
+  httpProxy:
+    name: ""
+    serviceName: ""
+    servicePort: 8080
+    pathPrefix: /
+    responseTimeout: 60s

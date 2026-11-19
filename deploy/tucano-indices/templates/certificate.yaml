@@ -1,0 +1,17 @@
+{{- if and .Values.beakcloud.enabled .Values.beakcloud.certificate.create }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "tucano-indices.beakcloudCertificateName" . }}
+  labels:
+    {{- include "tucano-indices.labels" . | nindent 4 }}
+    app.kubernetes.io/component: certificate
+spec:
+  secretName: {{ include "tucano-indices.beakcloudTLSSecretName" . }}
+  dnsNames:
+    - {{ required "beakcloud.fqdn is required" .Values.beakcloud.fqdn | quote }}
+  issuerRef:
+    name: {{ required "beakcloud.certificate.issuerRef.name is required" .Values.beakcloud.certificate.issuerRef.name }}
+    kind: {{ .Values.beakcloud.certificate.issuerRef.kind | default "ClusterIssuer" }}
+    group: {{ .Values.beakcloud.certificate.issuerRef.group | default "cert-manager.io" }}
+{{- end }}

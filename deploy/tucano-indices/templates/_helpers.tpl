@@ -39,3 +39,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- default "default" .Values.serviceAccount.name }}
 {{- end }}
 {{- end }}
+
+{{- define "tucano-indices.beakcloudTLSSecretName" -}}
+{{- default (printf "%s-tls" (include "tucano-indices.fullname" .)) .Values.beakcloud.certificate.secretName }}
+{{- end }}
+
+{{- define "tucano-indices.beakcloudCertificateName" -}}
+{{- default (include "tucano-indices.beakcloudTLSSecretName" .) .Values.beakcloud.certificate.name }}
+{{- end }}

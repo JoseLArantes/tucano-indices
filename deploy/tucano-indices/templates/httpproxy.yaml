@@ -1,0 +1,24 @@
+{{- if and .Values.beakcloud.enabled .Values.api.enabled }}
+apiVersion: projectcontour.io/v1
+kind: HTTPProxy
+metadata:
+  name: {{ default (include "tucano-indices.fullname" .) .Values.beakcloud.httpProxy.name }}
+  labels:
+    {{- include "tucano-indices.labels" . | nindent 4 }}
+    app.kubernetes.io/component: http-proxy
+spec:
+  ingressClassName: {{ required "beakcloud.ingressClassName is required" .Values.beakcloud.ingressClassName | quote }}
+  virtualhost:
+    fqdn: {{ required "beakcloud.fqdn is required" .Values.beakcloud.fqdn | quote }}
+    tls:
+      secretName: {{ include "tucano-indices.beakcloudTLSSecretName" . }}
+      minimumProtocolVersion: {{ .Values.beakcloud.tls.minimumProtocolVersion | quote }}
+  routes:
+    - conditions:
+        - prefix: {{ .Values.beakcloud.httpProxy.pathPrefix | quote }}
+      services:
+        - name: {{ default (printf "%s-api" (include "tucano-indices.fullname" .)) .Values.beakcloud.httpProxy.serviceName }}
+          port: {{ .Values.beakcloud.httpProxy.servicePort }}
+      timeoutPolicy:
+        response: {{ .Values.beakcloud.httpProxy.responseTimeout | quote }}
+{{- end }}
