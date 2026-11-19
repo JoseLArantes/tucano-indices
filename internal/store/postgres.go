@@ -19,39 +19,53 @@ import (
 	"github.com/JoseLArantes/tucano-indices/internal/domain"
 )
 
-type queryPool interface {
+// Pool is the database surface used by Postgres.
+type Pool interface {
 	Ping(context.Context) error
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 	QueryRow(context.Context, string, ...any) pgx.Row
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
-	BeginTx(context.Context, pgx.TxOptions) (transaction, error)
+	BeginTx(context.Context, pgx.TxOptions) (Tx, error)
 }
 
-type transaction interface {
+// Tx is the transaction surface used by Postgres.
+type Tx interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Commit(context.Context) error
 	Rollback(context.Context) error
 }
 
-type sourceConnection interface {
+// Connection is the dedicated connection surface used for advisory locks.
+type Connection interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
 	Release()
 }
 
+// Postgres stores catalog and observation data in PostgreSQL.
 type Postgres struct {
-	pool    queryPool
-	acquire func(context.Context) (sourceConnection, error)
+	pool    Pool
+	acquire func(context.Context) (Connection, error)
 }
 
 func New(pool *pgxpool.Pool) *Postgres {
 	return &Postgres{
 		pool: pgxPoolAdapter{pool: pool},
-		acquire: func(ctx context.Context) (sourceConnection, error) {
+		acquire: func(ctx context.Context) (Connection, error) {
 			return pool.Acquire(ctx)
 		},
 	}
+}
+
+// NewWithPool builds a store from a custom Pool implementation.
+func NewWithPool(pool Pool) *Postgres {
+	return &Postgres{pool: pool}
+}
+
+// NewWithPoolAndAcquire builds a store with a custom source-connection acquirer.
+func NewWithPoolAndAcquire(pool Pool, acquire func(context.Context) (Connection, error)) *Postgres {
+	return &Postgres{pool: pool, acquire: acquire}
 }
 
 type pgxPoolAdapter struct{ pool *pgxpool.Pool }
@@ -66,7 +80,7 @@ func (p pgxPoolAdapter) QueryRow(ctx context.Context, sql string, args ...any) p
 func (p pgxPoolAdapter) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return p.pool.Exec(ctx, sql, args...)
 }
-func (p pgxPoolAdapter) BeginTx(ctx context.Context, options pgx.TxOptions) (transaction, error) {
+func (p pgxPoolAdapter) BeginTx(ctx context.Context, options pgx.TxOptions) (Tx, error) {
 	tx, err := p.pool.BeginTx(ctx, options)
 	if err != nil {
 		return nil, err
@@ -444,6 +458,9 @@ func (s *Postgres) RecentRuns(ctx context.Context, source string, limit int) ([]
 }
 
 func (s *Postgres) AcquireSourceLock(ctx context.Context, key int64) (func(), bool, error) {
+	if s.acquire == nil {
+		return nil, false, errors.New("source connection acquire is not configured")
+	}
 	conn, err := s.acquire(ctx)
 	if err != nil {
 		return nil, false, err

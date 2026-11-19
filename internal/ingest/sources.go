@@ -373,7 +373,7 @@ func (s *Syncer) fetchTesouro(ctx context.Context, series domain.Series, from, t
 	iType, iMaturity, iDate := index("tipotitulo"), index("datavencimento"), index("database")
 	iBuy, iSell := index("taxacompramanha"), index("taxavendamanha")
 	if iType < 0 || iMaturity < 0 || iDate < 0 || (iBuy < 0 && iSell < 0) {
-		return nil, fmt.Errorf("Tesouro CSV is missing required columns")
+		return nil, fmt.Errorf("missing required Tesouro CSV columns")
 	}
 	out := make([]domain.ObservationInput, 0)
 	for _, row := range rows[1:] {
@@ -637,7 +637,7 @@ func ParseSelicCSV(raw []byte) ([]domain.ObservationInput, error) {
 		}
 	}
 	if headerAt < 0 {
-		return nil, fmt.Errorf("Selic CSV header is missing")
+		return nil, fmt.Errorf("missing Selic CSV header")
 	}
 	columns := map[string]int{}
 	for i, value := range rows[headerAt] {
@@ -646,7 +646,7 @@ func ParseSelicCSV(raw []byte) ([]domain.ObservationInput, error) {
 	find := func(key string) int { return columns[normalizeHeader(key)] }
 	dateCol, annualCol := find("Data"), find("Taxa (% a.a.)")
 	if dateCol < 0 || annualCol < 0 {
-		return nil, fmt.Errorf("Selic CSV is missing date or annual rate")
+		return nil, fmt.Errorf("missing Selic CSV date or annual rate")
 	}
 	fields := []string{"Fator diário", "Financeiro (R$)", "Operações", "Taxa média", "Taxa mediana", "Taxa modal", "Desvio padrão", "Índice de curtose"}
 	keys := []string{"daily_factor", "financial_volume", "operations_count", "average_rate", "median_rate", "modal_rate", "std_deviation", "kurtosis_index"}
@@ -688,7 +688,7 @@ func ParseSelicCSV(raw []byte) ([]domain.ObservationInput, error) {
 		out = append(out, domain.ObservationInput{Date: date.Format("2006-01-02"), Value: formatFloat(annual), Attributes: extra, Source: "csv_import"})
 	}
 	if len(out) == 0 {
-		return nil, fmt.Errorf("Selic CSV contains no usable observations")
+		return nil, fmt.Errorf("no usable observations in Selic CSV")
 	}
 	return out, nil
 }

@@ -27,7 +27,7 @@ func getBytes(ctx context.Context, client doer, address, accept string, limit in
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if limit <= 0 {
 		limit = 16 << 20
 	}

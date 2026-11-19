@@ -12,14 +12,9 @@ import (
 
 	"github.com/JoseLArantes/tucano-indices/internal/config"
 	"github.com/JoseLArantes/tucano-indices/internal/ingest"
+	"github.com/JoseLArantes/tucano-indices/internal/scheduler"
 	"github.com/JoseLArantes/tucano-indices/internal/store"
 )
-
-type schedule struct {
-	source string
-	hour   int
-	minute int
-}
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
@@ -37,7 +32,7 @@ func main() {
 	}
 	defer pool.Close()
 	syncer := ingest.NewSyncer(pool, store.New(pool), cfg)
-	jobs := []schedule{{source: "focus", hour: 7}, {source: "tesouro", hour: 18, minute: 30}, {source: "sgs", hour: 19, minute: 30}, {source: "selic", hour: 20, minute: 30}, {source: "b3", hour: 21}}
+	jobs := []scheduler.Job{{Source: "focus", Hour: 7}, {Source: "tesouro", Hour: 18, Minute: 30}, {Source: "sgs", Hour: 19, Minute: 30}, {Source: "selic", Hour: 20, Minute: 30}, {Source: "b3", Hour: 21}}
 	for _, job := range jobs {
 		job := job
 		go runSchedule(ctx, syncer, job, logger)
@@ -46,9 +41,9 @@ func main() {
 	<-ctx.Done()
 }
 
-func runSchedule(ctx context.Context, syncer *ingest.Syncer, job schedule, logger *slog.Logger) {
+func runSchedule(ctx context.Context, syncer *ingest.Syncer, job scheduler.Job, logger *slog.Logger) {
 	for {
-		next := nextWeekday(job)
+		next := job.Next(time.Now())
 		delay := time.Until(next)
 		if delay < 0 {
 			delay = 0
@@ -61,32 +56,12 @@ func runSchedule(ctx context.Context, syncer *ingest.Syncer, job schedule, logge
 		case <-timer.C:
 		}
 		runCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-		result, err := syncer.Run(runCtx, job.source, ingest.SyncOptions{})
+		result, err := syncer.Run(runCtx, job.Source, ingest.SyncOptions{})
 		cancel()
 		if err != nil {
-			logger.Error("scheduled index sync failed", "source", job.source, "error", err, "points_seen", result.PointsSeen)
+			logger.Error("scheduled index sync failed", "source", job.Source, "error", err, "points_seen", result.PointsSeen)
 		} else {
-			logger.Info("scheduled index sync finished", "source", job.source, "status", result.Status, "points_seen", result.PointsSeen, "points_stored", result.PointsStored)
+			logger.Info("scheduled index sync finished", "source", job.Source, "status", result.Status, "points_seen", result.PointsSeen, "points_stored", result.PointsStored)
 		}
 	}
-}
-
-func nextWeekday(job schedule) time.Time {
-	return nextWeekdayAfter(time.Now(), job)
-}
-
-func nextWeekdayAfter(now time.Time, job schedule) time.Time {
-	location, err := time.LoadLocation("America/Sao_Paulo")
-	if err != nil {
-		location = time.FixedZone("BRT", -3*60*60)
-	}
-	now = now.In(location)
-	next := time.Date(now.Year(), now.Month(), now.Day(), job.hour, job.minute, 0, 0, location)
-	if !next.After(now) {
-		next = next.AddDate(0, 0, 1)
-	}
-	for next.Weekday() == time.Saturday || next.Weekday() == time.Sunday {
-		next = next.AddDate(0, 0, 1)
-	}
-	return next
 }

@@ -289,7 +289,7 @@ func (h *Handler) importSelic(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "file_required", "A file field is required")
 			return
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		raw, err = io.ReadAll(io.LimitReader(file, 20<<20))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "file_read_failed", err.Error())

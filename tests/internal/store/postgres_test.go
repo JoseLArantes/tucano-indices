@@ -1,10 +1,11 @@
-package store
+package store_test
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/JoseLArantes/tucano-indices/internal/domain"
+	"github.com/JoseLArantes/tucano-indices/internal/store"
 )
 
 type fakeRow struct {
@@ -199,7 +201,7 @@ func (p *fakePool) Exec(_ context.Context, query string, args ...any) (pgconn.Co
 	}
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
-func (p *fakePool) BeginTx(context.Context, pgx.TxOptions) (transaction, error) {
+func (p *fakePool) BeginTx(context.Context, pgx.TxOptions) (store.Tx, error) {
 	p.begins++
 	if p.beginErr != nil {
 		return nil, p.beginErr
@@ -212,10 +214,22 @@ func (p *fakePool) BeginTx(context.Context, pgx.TxOptions) (transaction, error) 
 	return tx, nil
 }
 
-func newFakePostgres(pool *fakePool) *Postgres {
-	return &Postgres{pool: pool, acquire: func(context.Context) (sourceConnection, error) {
-		return nil, errors.New("unexpected connection acquire")
-	}}
+func newFakePostgres(pool *fakePool) *store.Postgres {
+	return store.NewWithPool(pool)
+}
+
+func newFakePostgresWithAcquire(pool *fakePool, acquire func(context.Context) (store.Connection, error)) *store.Postgres {
+	return store.NewWithPoolAndAcquire(pool, acquire)
+}
+
+func TestPing(t *testing.T) {
+	if err := newFakePostgres(&fakePool{}).Ping(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("ping failed")
+	if err := newFakePostgres(&fakePool{pingErr: want}).Ping(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("Ping() = %v, want %v", err, want)
+	}
 }
 
 func TestListAndGetSeries(t *testing.T) {
@@ -239,15 +253,34 @@ func TestListAndGetSeries(t *testing.T) {
 	}
 }
 
+func TestCatalogErrors(t *testing.T) {
+	want := errors.New("query failed")
+	if _, err := newFakePostgres(&fakePool{queryErr: want}).ListSeries(context.Background(), 0, nil); !errors.Is(err, want) {
+		t.Fatalf("ListSeries query error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{rows: &fakeRows{values: [][]any{{}}, scanErr: want}}).ListSeries(context.Background(), 0, nil); !errors.Is(err, want) {
+		t.Fatalf("ListSeries scan error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{rows: &fakeRows{err: want}}).ListSeries(context.Background(), 0, nil); !errors.Is(err, want) {
+		t.Fatalf("ListSeries iteration error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{rowResults: []fakeRow{{err: want}}}).GetSeries(context.Background(), "ibov"); !errors.Is(err, want) {
+		t.Fatalf("GetSeries error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{}).GetSeries(context.Background(), "ibov"); err == nil {
+		t.Fatal("GetSeries accepted an empty result")
+	}
+}
+
 func TestObservationQueriesAndChartResolutions(t *testing.T) {
 	recorded := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	row := []any{"ibov", "", "2026-01-02", "130.50", int32(2), true, "b3", recorded, []byte(`{"exchange":"b3"}`)}
 	for _, test := range []struct {
 		name string
-		run  func(*Postgres) error
+		run  func(*store.Postgres) error
 	}{
-		{name: "latest", run: func(db *Postgres) error { _, err := db.Latest(context.Background(), " IBOV ", ""); return err }},
-		{name: "latest as of", run: func(db *Postgres) error {
+		{name: "latest", run: func(db *store.Postgres) error { _, err := db.Latest(context.Background(), " IBOV ", ""); return err }},
+		{name: "latest as of", run: func(db *store.Postgres) error {
 			_, err := db.LatestAsOf(context.Background(), "IBOV", "", "2026-01-02")
 			return err
 		}},
@@ -267,7 +300,7 @@ func TestObservationQueriesAndChartResolutions(t *testing.T) {
 		t.Run(resolution, func(t *testing.T) {
 			pool := &fakePool{rows: &fakeRows{values: [][]any{row}}}
 			db := newFakePostgres(pool)
-			points, err := db.Series(context.Background(), "IBOV", SeriesQuery{From: "2026-01-01", To: "2026-01-31", AsOf: "2026-01-31", Limit: 25, Offset: 2, Resolution: resolution})
+			points, err := db.Series(context.Background(), "IBOV", store.SeriesQuery{From: "2026-01-01", To: "2026-01-31", AsOf: "2026-01-31", Limit: 25, Offset: 2, Resolution: resolution})
 			if err != nil || len(points) != 1 || points[0].X != "2026-01-02" || points[0].Y != "130.50" || string(points[0].Attributes) != `{"exchange":"b3"}` {
 				t.Fatalf("Series(%s) = %#v, %v", resolution, points, err)
 			}
@@ -276,22 +309,87 @@ func TestObservationQueriesAndChartResolutions(t *testing.T) {
 			}
 		})
 	}
-	if _, err := newFakePostgres(&fakePool{}).Series(context.Background(), "ibov", SeriesQuery{Resolution: "hourly"}); err == nil {
+	if _, err := newFakePostgres(&fakePool{}).Series(context.Background(), "ibov", store.SeriesQuery{Resolution: "hourly"}); err == nil {
 		t.Fatal("Series accepted unsupported resolution")
 	}
 
 	pool := &fakePool{rows: &fakeRows{values: [][]any{row}}}
-	observations, err := newFakePostgres(pool).ObservationSeries(context.Background(), "ibov", SeriesQuery{Resolution: "monthly"})
+	observations, err := newFakePostgres(pool).ObservationSeries(context.Background(), "ibov", store.SeriesQuery{Resolution: "monthly"})
 	if err != nil || len(observations) != 1 || !observations[0].IsCurrent || observations[0].Revision != 2 {
 		t.Fatalf("ObservationSeries() = %#v, %v", observations, err)
 	}
 	if !strings.Contains(pool.queryCalls[0].query, "date_trunc($6, ref_date)") {
 		t.Fatalf("monthly query is not bucketed: %s", pool.queryCalls[0].query)
 	}
-	if _, err := newFakePostgres(&fakePool{}).ObservationSeries(context.Background(), "ibov", SeriesQuery{Resolution: "yearly"}); err == nil {
+	if _, err := newFakePostgres(&fakePool{}).ObservationSeries(context.Background(), "ibov", store.SeriesQuery{Resolution: "yearly"}); err == nil {
 		t.Fatal("ObservationSeries accepted unsupported resolution")
 	}
+}
 
+func TestSeriesQueryArgsAndErrors(t *testing.T) {
+	ctx := context.Background()
+	pool := &fakePool{}
+	if _, err := newFakePostgres(pool).Series(ctx, " IBOV ", store.SeriesQuery{}); err != nil {
+		t.Fatal(err)
+	}
+	args := pool.queryCalls[0].args
+	for i := 2; i <= 4; i++ {
+		if value, ok := args[i].(*string); !ok || value != nil {
+			t.Fatalf("chart arg %d = %#v, want nil *string", i, args[i])
+		}
+	}
+	if args[0] != "ibov" {
+		t.Fatalf("unexpected empty chart args: %#v", args)
+	}
+	pool = &fakePool{}
+	if _, err := newFakePostgres(pool).Series(ctx, "IBOV", store.SeriesQuery{From: "2026-01-01", To: "2026-01-31", AsOf: "2026-01-31"}); err != nil {
+		t.Fatal(err)
+	}
+	args = pool.queryCalls[0].args
+	for i, want := range []string{"2026-01-01", "2026-01-31", "2026-01-31"} {
+		if got := args[2+i].(*string); got == nil || *got != want {
+			t.Fatalf("chart arg %d = %v, want %q", i, args[2+i], want)
+		}
+	}
+	pool = &fakePool{}
+	if _, err := newFakePostgres(pool).Series(ctx, "IBOV", store.SeriesQuery{Limit: -1, Offset: -1}); err != nil {
+		t.Fatal(err)
+	}
+	args = pool.queryCalls[0].args
+	if args[len(args)-2] != 2000 || args[len(args)-1] != 0 {
+		t.Fatalf("negative limit/offset = %#v", args)
+	}
+	pool = &fakePool{}
+	if _, err := newFakePostgres(pool).ObservationSeries(ctx, "IBOV", store.SeriesQuery{Resolution: "weekly", Limit: -1, Offset: -1}); err != nil {
+		t.Fatal(err)
+	}
+	args = pool.queryCalls[0].args
+	if args[len(args)-2] != 2000 || args[len(args)-1] != 0 {
+		t.Fatalf("negative observation limit/offset = %#v", args)
+	}
+	if pool.queryCalls[0].args[5] != "week" {
+		t.Fatalf("weekly unit = %v", pool.queryCalls[0].args[5])
+	}
+	pool = &fakePool{}
+	if _, err := newFakePostgres(pool).ObservationSeries(ctx, "IBOV", store.SeriesQuery{Resolution: "monthly"}); err != nil {
+		t.Fatal(err)
+	}
+	if pool.queryCalls[0].args[5] != "month" {
+		t.Fatalf("monthly unit = %v", pool.queryCalls[0].args[5])
+	}
+	want := errors.New("query failed")
+	if _, err := newFakePostgres(&fakePool{queryErr: want}).Series(ctx, "ibov", store.SeriesQuery{}); !errors.Is(err, want) {
+		t.Fatalf("Series query error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{rows: &fakeRows{values: [][]any{{}}, scanErr: want}}).Series(ctx, "ibov", store.SeriesQuery{}); !errors.Is(err, want) {
+		t.Fatalf("Series scan error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{queryErr: want}).ObservationSeries(ctx, "ibov", store.SeriesQuery{}); !errors.Is(err, want) {
+		t.Fatalf("ObservationSeries query error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{rows: &fakeRows{err: want}}).ObservationSeries(ctx, "ibov", store.SeriesQuery{}); !errors.Is(err, want) {
+		t.Fatalf("ObservationSeries iteration error = %v", err)
+	}
 }
 
 func TestDateAndCountQueries(t *testing.T) {
@@ -310,6 +408,22 @@ func TestDateAndCountQueries(t *testing.T) {
 	got, err = newFakePostgres(pool).MaxDate(context.Background(), "ibov", "")
 	if err != nil || !got.IsZero() {
 		t.Fatalf("empty MaxDate() = %v, %v", got, err)
+	}
+	pool = &fakePool{rowResults: []fakeRow{{values: []any{int64(0)}}}}
+	if _, err := newFakePostgres(pool).CountCurrent(context.Background(), "ibov", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 2; i++ {
+		if value, ok := pool.rowCalls[0].args[i].(*string); !ok || value != nil {
+			t.Fatalf("blank date arg %d = %#v, want nil *string", i, pool.rowCalls[0].args[i])
+		}
+	}
+	want := errors.New("query failed")
+	if _, err := newFakePostgres(&fakePool{rowResults: []fakeRow{{err: want}}}).MaxDate(context.Background(), "ibov", ""); !errors.Is(err, want) {
+		t.Fatalf("MaxDate error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{rowResults: []fakeRow{{err: want}}}).CountCurrent(context.Background(), "ibov", "", ""); !errors.Is(err, want) {
+		t.Fatalf("CountCurrent error = %v", err)
 	}
 }
 
@@ -348,6 +462,35 @@ func TestUpsertCreatesNoOpsAndRevisions(t *testing.T) {
 	}
 }
 
+func TestUpsertDecimalEqualityAndAttributes(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name      string
+		oldValue  string
+		newValue  string
+		wantStore int
+		wantExecs int
+	}{
+		{name: "equivalent decimals", oldValue: "1.2300", newValue: "1.23", wantStore: 0, wantExecs: 1},
+		{name: "negative equivalent decimals", oldValue: "-0.50", newValue: "-0.5", wantStore: 0, wantExecs: 1},
+		{name: "different decimals", oldValue: "0", newValue: "0.0001", wantStore: 1, wantExecs: 2},
+		{name: "invalid stored decimal", oldValue: "invalid", newValue: "1", wantStore: 1, wantExecs: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tx := &fakeTx{queryRows: []fakeRow{{values: []any{test.oldValue, int32(1)}}}}
+			pool := &fakePool{txPlans: []*fakeTx{tx}}
+			stored, err := newFakePostgres(pool).Upsert(ctx, "ibov", []domain.ObservationInput{{Date: "2026-01-01", Value: test.newValue, Attributes: []byte("not-json")}}, "manual")
+			if err != nil || stored != test.wantStore || len(tx.execCalls) != test.wantExecs {
+				t.Fatalf("Upsert() = %d, %v; execs=%d", stored, err, len(tx.execCalls))
+			}
+			last := tx.execCalls[len(tx.execCalls)-1]
+			if test.wantStore == 1 && last.args[7] != "{}" {
+				t.Fatalf("invalid attributes were not replaced: %#v", last.args)
+			}
+		})
+	}
+}
+
 func TestUpsertValidationAndRollback(t *testing.T) {
 	for _, input := range []domain.ObservationInput{{Date: "bad", Value: "1"}, {Date: "2026-01-01", Value: "not-number"}} {
 		tx := &fakeTx{}
@@ -370,6 +513,28 @@ func TestUpsertValidationAndRollback(t *testing.T) {
 	pool = &fakePool{beginErr: errors.New("begin failed")}
 	if _, err := newFakePostgres(pool).Upsert(context.Background(), "ibov", []domain.ObservationInput{{Date: "2026-01-01", Value: "1"}}, "api"); err == nil {
 		t.Fatal("Upsert ignored BeginTx error")
+	}
+}
+
+func TestUpsertAdditionalErrors(t *testing.T) {
+	ctx := context.Background()
+	input := []domain.ObservationInput{{Date: "2026-01-01", Value: "1"}}
+	want := errors.New("failure")
+	lookupTx := &fakeTx{queryRows: []fakeRow{{err: want}}}
+	if _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{lookupTx}}).Upsert(ctx, "ibov", input, "api"); !errors.Is(err, want) {
+		t.Fatalf("lookup error = %v", err)
+	}
+	noopTx := &fakeTx{queryRows: []fakeRow{{values: []any{"1", int32(1)}}}, execErr: want}
+	if _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{noopTx}}).Upsert(ctx, "ibov", input, "api"); !errors.Is(err, want) {
+		t.Fatalf("no-op update error = %v", err)
+	}
+	revisionTx := &fakeTx{queryRows: []fakeRow{{values: []any{"2", int32(1)}}}, execErrAt: 1, execErr: want}
+	if _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{revisionTx}}).Upsert(ctx, "ibov", input, "api"); !errors.Is(err, want) {
+		t.Fatalf("revision error = %v", err)
+	}
+	commitTx := &fakeTx{queryRows: []fakeRow{{err: pgx.ErrNoRows}}, commitErr: want}
+	if _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{commitTx}}).Upsert(ctx, "ibov", input, "api"); !errors.Is(err, want) {
+		t.Fatalf("commit error = %v", err)
 	}
 }
 
@@ -403,6 +568,41 @@ func TestIdempotentUpsertReplayConflictAndFreshWrite(t *testing.T) {
 	}
 }
 
+func TestIdempotentUpsertErrors(t *testing.T) {
+	ctx := context.Background()
+	want := errors.New("failure")
+	if _, _, _, err := newFakePostgres(&fakePool{beginErr: want}).IdempotentUpsert(ctx, "key", "op", "hash", "ibov", nil, "api"); !errors.Is(err, want) {
+		t.Fatalf("begin error = %v", err)
+	}
+	lockTx := &fakeTx{execErr: want}
+	if _, _, _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{lockTx}}).IdempotentUpsert(ctx, "key", "op", "hash", "ibov", nil, "api"); !errors.Is(err, want) {
+		t.Fatalf("lock error = %v", err)
+	}
+	lookupTx := &fakeTx{queryRows: []fakeRow{{err: want}}}
+	if _, _, _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{lookupTx}}).IdempotentUpsert(ctx, "key", "op", "hash", "ibov", nil, "api"); !errors.Is(err, want) {
+		t.Fatalf("lookup error = %v", err)
+	}
+	replayTx := &fakeTx{queryRows: []fakeRow{{values: []any{"op", "hash", []byte(`{}`)}}}, commitErr: want}
+	if _, _, _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{replayTx}}).IdempotentUpsert(ctx, "key", "op", "hash", "ibov", nil, "api"); !errors.Is(err, want) {
+		t.Fatalf("replay commit error = %v", err)
+	}
+	outer := &fakeTx{queryRows: []fakeRow{{err: pgx.ErrNoRows}}}
+	inner := &fakeTx{queryRows: []fakeRow{{err: pgx.ErrNoRows}}, execErr: want}
+	if _, _, _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{outer, inner}}).IdempotentUpsert(ctx, "key", "op", "hash", "ibov", []domain.ObservationInput{{Date: "2026-01-01", Value: "1"}}, "api"); !errors.Is(err, want) {
+		t.Fatalf("inner upsert error = %v", err)
+	}
+	outer = &fakeTx{queryRows: []fakeRow{{err: pgx.ErrNoRows}}, execErrAt: 2, execErr: want}
+	inner = &fakeTx{queryRows: []fakeRow{{err: pgx.ErrNoRows}}}
+	if _, _, _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{outer, inner}}).IdempotentUpsert(ctx, "key", "op", "hash", "ibov", []domain.ObservationInput{{Date: "2026-01-01", Value: "1"}}, "api"); !errors.Is(err, want) {
+		t.Fatalf("idempotency insert error = %v", err)
+	}
+	outer = &fakeTx{queryRows: []fakeRow{{err: pgx.ErrNoRows}}, commitErr: want}
+	inner = &fakeTx{queryRows: []fakeRow{{err: pgx.ErrNoRows}}}
+	if _, _, _, err := newFakePostgres(&fakePool{txPlans: []*fakeTx{outer, inner}}).IdempotentUpsert(ctx, "key", "op", "hash", "ibov", []domain.ObservationInput{{Date: "2026-01-01", Value: "1"}}, "api"); !errors.Is(err, want) {
+		t.Fatalf("fresh commit error = %v", err)
+	}
+}
+
 func TestRunLedgerAndSourceLocks(t *testing.T) {
 	ctx := context.Background()
 	pool := &fakePool{}
@@ -411,6 +611,14 @@ func TestRunLedgerAndSourceLocks(t *testing.T) {
 	if err != nil || id == "" || len(pool.execCalls) != 1 || !strings.Contains(pool.execCalls[0].query, "INSERT INTO index_sync_runs") {
 		t.Fatalf("StartRun() = %q, %v calls=%#v", id, err, pool.execCalls)
 	}
+	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(id) {
+		t.Fatalf("StartRun() id = %q, want RFC 4122 version 4 UUID", id)
+	}
+	second, err := db.StartRun(ctx, "b3", time.Time{}, time.Time{})
+	if err != nil || second == id {
+		t.Fatalf("consecutive run ids = %q, %q, %v", id, second, err)
+	}
+
 	pool = &fakePool{}
 	db = newFakePostgres(pool)
 	message := errors.New("source timeout")
@@ -426,12 +634,16 @@ func TestRunLedgerAndSourceLocks(t *testing.T) {
 	if err != nil || len(runs) != 1 || runs[0].ID != "run-id" || runs[0].FinishedAt == nil || runs[0].PointsSeen != 10 {
 		t.Fatalf("RecentRuns() = %#v, %v", runs, err)
 	}
-	if _, err := newFakePostgres(&fakePool{}).RecentRuns(ctx, "", 201); err != nil {
+	pool = &fakePool{}
+	if _, err := newFakePostgres(pool).RecentRuns(ctx, "", 201); err != nil {
 		t.Fatalf("RecentRuns default limit failed: %v", err)
+	}
+	if pool.queryCalls[0].args[1] != 50 {
+		t.Fatalf("RecentRuns limit = %v, want 50", pool.queryCalls[0].args[1])
 	}
 
 	locked := &fakeSourceConn{row: fakeRow{values: []any{true}}}
-	db = &Postgres{pool: &fakePool{}, acquire: func(context.Context) (sourceConnection, error) { return locked, nil }}
+	db = newFakePostgresWithAcquire(&fakePool{}, func(context.Context) (store.Connection, error) { return locked, nil })
 	unlock, acquired, err := db.AcquireSourceLock(ctx, 123)
 	if err != nil || !acquired || unlock == nil || locked.released {
 		t.Fatalf("AcquireSourceLock(lock=true): acquired=%v err=%v unlockPresent=%v", acquired, err, unlock != nil)
@@ -441,14 +653,43 @@ func TestRunLedgerAndSourceLocks(t *testing.T) {
 		t.Fatalf("unlock was not released: %#v", locked)
 	}
 	unlocked := &fakeSourceConn{row: fakeRow{values: []any{false}}}
-	db.acquire = func(context.Context) (sourceConnection, error) { return unlocked, nil }
+	db = newFakePostgresWithAcquire(&fakePool{}, func(context.Context) (store.Connection, error) { return unlocked, nil })
 	unlock, acquired, err = db.AcquireSourceLock(ctx, 123)
 	if err != nil || acquired || unlock != nil || !unlocked.released {
 		t.Fatalf("AcquireSourceLock(lock=false): acquired=%v err=%v unlockPresent=%v", acquired, err, unlock != nil)
 	}
-	db.acquire = func(context.Context) (sourceConnection, error) { return nil, errors.New("acquire failed") }
+	db = newFakePostgresWithAcquire(&fakePool{}, func(context.Context) (store.Connection, error) { return nil, errors.New("acquire failed") })
 	if _, _, err := db.AcquireSourceLock(ctx, 123); err == nil {
 		t.Fatal("AcquireSourceLock ignored acquire error")
+	}
+	db = newFakePostgres(&fakePool{})
+	if _, _, err := db.AcquireSourceLock(ctx, 123); err == nil {
+		t.Fatal("AcquireSourceLock ignored missing acquire function")
+	}
+	scanErr := &fakeSourceConn{row: fakeRow{err: errors.New("lock query failed")}}
+	db = newFakePostgresWithAcquire(&fakePool{}, func(context.Context) (store.Connection, error) { return scanErr, nil })
+	if _, _, err := db.AcquireSourceLock(ctx, 123); err == nil || !scanErr.released {
+		t.Fatalf("AcquireSourceLock scan error = %v, released=%v", err, scanErr.released)
+	}
+}
+
+func TestRunLedgerErrors(t *testing.T) {
+	ctx := context.Background()
+	want := errors.New("exec failed")
+	if _, err := newFakePostgres(&fakePool{execErr: want}).StartRun(ctx, "b3", time.Time{}, time.Time{}); !errors.Is(err, want) {
+		t.Fatalf("StartRun error = %v", err)
+	}
+	if err := newFakePostgres(&fakePool{execErr: want}).FinishRun(ctx, "id", "failed", 1, 0, nil); !errors.Is(err, want) {
+		t.Fatalf("FinishRun error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{queryErr: want}).RecentRuns(ctx, "", 10); !errors.Is(err, want) {
+		t.Fatalf("RecentRuns query error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{rows: &fakeRows{values: [][]any{{}}, scanErr: want}}).RecentRuns(ctx, "", 10); !errors.Is(err, want) {
+		t.Fatalf("RecentRuns scan error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{rows: &fakeRows{err: want}}).RecentRuns(ctx, "", 10); !errors.Is(err, want) {
+		t.Fatalf("RecentRuns iteration error = %v", err)
 	}
 }
 
@@ -465,19 +706,25 @@ func (c *fakeSourceConn) Exec(_ context.Context, query string, args ...any) (pgc
 }
 func (c *fakeSourceConn) Release() { c.released = true }
 
-func TestScanObservationNullAttributesAndErrors(t *testing.T) {
+func TestObservationScanNullAttributesAndErrors(t *testing.T) {
+	ctx := context.Background()
 	recorded := time.Now().UTC()
 	rows := &fakeRows{values: [][]any{{"ibov", "", "2026-01-02", "10", int32(1), true, "b3", recorded, []byte(`{}`)}}}
-	items, err := scanObservations(rows)
+	items, err := newFakePostgres(&fakePool{rows: rows}).Latest(ctx, "ibov", "")
 	if err != nil || len(items) != 1 || items[0].Attributes != nil {
-		t.Fatalf("scanObservations() = %#v, %v", items, err)
+		t.Fatalf("Latest() = %#v, %v", items, err)
 	}
-	rows = &fakeRows{values: [][]any{{"ibov"}}, scanErr: errors.New("bad row")}
-	if _, err := scanObservations(rows); err == nil {
-		t.Fatal("scanObservations ignored row scan error")
+	want := errors.New("bad row")
+	if _, err := newFakePostgres(&fakePool{rows: &fakeRows{values: [][]any{{"ibov"}}, scanErr: want}}).Latest(ctx, "ibov", ""); !errors.Is(err, want) {
+		t.Fatalf("Latest scan error = %v", err)
 	}
-	rows = &fakeRows{err: errors.New("iteration failed")}
-	if _, err := scanObservations(rows); err == nil {
-		t.Fatal("scanObservations ignored iteration error")
+	if _, err := newFakePostgres(&fakePool{rows: &fakeRows{err: want}}).Latest(ctx, "ibov", ""); !errors.Is(err, want) {
+		t.Fatalf("Latest iteration error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{queryErr: want}).Latest(ctx, "ibov", ""); !errors.Is(err, want) {
+		t.Fatalf("Latest query error = %v", err)
+	}
+	if _, err := newFakePostgres(&fakePool{queryErr: want}).LatestAsOf(ctx, "ibov", "", "2026-01-01"); !errors.Is(err, want) {
+		t.Fatalf("LatestAsOf query error = %v", err)
 	}
 }
