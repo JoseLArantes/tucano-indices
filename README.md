@@ -30,7 +30,7 @@ The scheduler runs on weekdays in `America/Sao_Paulo`: Focus at 07:00, Tesouro a
 
 ## API
 
-The full OpenAPI 3.1 contract is in [`api/openapi.yaml`](api/openapi.yaml). Service and worker runbooks, including their data flow diagrams, are indexed in [`docs/`](docs/README.md).
+The full OpenAPI 3.1 contract is in [`api/openapi.yaml`](api/openapi.yaml). Service and worker runbooks, including their data flow diagrams, are indexed in [`docs/`](docs/README.md). Run the VitePress site with `make docs` and open `http://localhost:5181`.
 
 Send the token as `Authorization: Bearer <API_TOKEN>`.
 
@@ -40,12 +40,13 @@ Send the token as `Authorization: Bearer <API_TOKEN>`.
 | `GET` | `/v1/indices/{code}/final` | Latest published point (or latest point per dimension) |
 | `GET` | `/v1/indices/{code}/series` | Ascending chart points; supports `from`, `to`, `last`, `dim`, `as_of`, and `resolution=raw\|weekly\|monthly` |
 | `PUT` | `/v1/indices/{code}/observations` | Idempotent manual import or correction; requires `Idempotency-Key` |
-| `POST` | `/v1/operations/sync/{source}` | Trigger `all`, `sgs`, `focus`, `tesouro`, `b3`, or `selic` |
+| `POST` | `/v1/indices/sync/{source}` | Trigger `all`, `sgs`, `focus`, `tesouro`, `b3`, or `selic` |
+| `POST` | `/v1/operations/sync/{source}` | Alias for manually triggering a sync |
 | `GET` | `/v1/operations/sync-runs` | Read the sync ledger |
 
 Chart points have a compact `{ "x": "YYYY-MM-DD", "y": "decimal" }` shape, with optional `dimension`, `source`, and `attributes`. Database indexes support date-ordered lookups by series and dimension. Weekly and monthly resolutions retain the last observation in each period.
 
-The former read paths `/v1/market-metrics` and `/v1/market-metrics/{code}` remain as compatibility aliases. The detailed Selic routes and CSV import are also retained under `/v1/selic`.
+The detailed Selic routes and CSV import are also retained under `/v1/selic`.
 
 ## Catalog coverage
 

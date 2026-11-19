@@ -292,11 +292,6 @@ func TestObservationQueriesAndChartResolutions(t *testing.T) {
 		t.Fatal("ObservationSeries accepted unsupported resolution")
 	}
 
-	pool = &fakePool{rows: &fakeRows{values: [][]any{row}}}
-	revisions, err := newFakePostgres(pool).Revisions(context.Background(), "ibov", SeriesQuery{Offset: -3})
-	if err != nil || len(revisions) != 1 || !revisions[0].IsCurrent || pool.queryCalls[0].args[6] != 0 {
-		t.Fatalf("Revisions() = %#v, %v; args=%#v", revisions, err, pool.queryCalls[0].args)
-	}
 }
 
 func TestDateAndCountQueries(t *testing.T) {

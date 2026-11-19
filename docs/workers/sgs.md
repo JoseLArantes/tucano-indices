@@ -34,8 +34,8 @@ A resposta esperada é um array de objetos `{ "data": "DD/MM/YYYY", "valor": "..
 
 ## Execução
 
-- API: `POST /v1/operations/sync/sgs?from=YYYY-MM-DD&to=YYYY-MM-DD`.
-- Alias: `POST /v1/system/workers/sgs/run`.
+- API: `POST /v1/indices/sync/sgs?from=YYYY-MM-DD&to=YYYY-MM-DD`.
+- Aliases: `POST /v1/operations/sync/{source}` e `POST /v1/system/workers/sgs/run`.
 - CLI: `make sync-indices SOURCE=sgs ARGS="-from YYYY-MM-DD -to YYYY-MM-DD"`.
 - Scheduler: dias úteis, às 19:30 em `America/Sao_Paulo`.
 

@@ -30,8 +30,9 @@ O comando precisa de `DATABASE_URL`, acesso HTTP à fonte escolhida e migraçõe
 
 | Método | Endpoint | Detalhe |
 |---|---|---|
-| `POST` | `/v1/operations/sync/{source}` | Dispara uma execução e aceita `from`/`to` opcionais. |
-| `POST` | `/v1/system/workers/{source}/run` | Alias do endpoint acima. |
+| `POST` | `/v1/indices/sync/{source}` | Endpoint principal para disparar uma execução; aceita `from`/`to` opcionais. |
+| `POST` | `/v1/operations/sync/{source}` | Alias para execução manual. |
+| `POST` | `/v1/system/workers/{source}/run` | Alias para execução manual. |
 | `GET` | `/v1/operations/sync-runs?source={source}&limit=50` | Lista o ledger. |
 | `GET` | `/v1/system/workers/runs` | Alias do ledger. |
 | `GET` | `/v1/system/workers` | Lista workers e últimas 20 execuções. |

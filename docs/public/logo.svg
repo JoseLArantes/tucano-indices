@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Tucano Indices">
+  <rect width="64" height="64" rx="16" fill="#0f172a"/>
+  <path d="M17 24c0-7 5-12 13-12h8c7 0 11 4 11 10 0 4-2 7-6 8l-2 1 2 1c4 1 6 4 6 8 0 6-4 10-11 10h-8c-8 0-13-5-13-12V24z" fill="#f8fafc"/>
+  <path d="M39 21l15 6c2 1 2 4 0 5l-15 6c-2 1-4-1-4-3V24c0-2 2-4 4-3z" fill="#f97316"/>
+  <circle cx="32" cy="27" r="3" fill="#0f172a"/>
+  <path d="M29 40c4 2 9 2 13 0" stroke="#0f172a" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+</svg>

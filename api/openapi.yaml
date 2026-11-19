@@ -33,8 +33,6 @@ tags:
     description: Valores finais e observações para visualização em gráficos.
   - name: Escrita
     description: Importação manual idempotente de observações.
-  - name: Compatibilidade
-    description: Rotas legadas de market-metrics mantidas para clientes existentes.
   - name: Selic
     description: Consulta e importação do histórico detalhado da Selic apurada.
   - name: Operações
@@ -286,110 +284,33 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
         '500': { $ref: '#/components/responses/InternalError' }
-  /v1/market-metrics:
-    get:
-      tags: [Compatibilidade]
-      operationId: listLegacyMetrics
-      deprecated: true
-      summary: Lista o catálogo legado de market-metrics
-      description: "Compatibilidade com o serviço anterior. Prefira `GET /v1/indices`. A resposta inclui o cabeçalho `Deprecation: true`."
+  /v1/indices/sync/{source}:
+    post:
+      tags: [Operações]
+      operationId: runIndexSync
+      summary: Executa uma sincronização de índices
+      description: |
+        Executa `all`, `sgs`, `focus`, `tesouro`, `b3` ou `selic` no processo da API.
+        A operação pode levar vários minutos. Se outro processo já detiver o lock da
+        mesma fonte, retorna `status=skipped`. Uma falha de fonte retorna HTTP 502 e
+        um resumo com status `failed`.
       parameters:
-        - $ref: '#/components/parameters/Group'
-        - $ref: '#/components/parameters/Codes'
-        - name: latest
-          in: query
-          description: Acrescenta observações finais por dimensão.
-          schema: { type: boolean, default: false }
-      responses:
-        '200':
-          description: Séries no formato legado.
-          headers:
-            Deprecation:
-              schema: { type: string, const: 'true' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/LegacySeriesList' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '500': { $ref: '#/components/responses/InternalError' }
-  /v1/market-metrics/{code}:
-    get:
-      tags: [Compatibilidade]
-      operationId: getLegacyMetricSeries
-      deprecated: true
-      summary: Consulta uma série no formato legado
-      description: "Prefira `GET /v1/indices/{code}/series`. A resposta inclui `Deprecation: true` e mantém o nome `ref_date` nos pontos."
-      parameters:
-        - $ref: '#/components/parameters/Code'
-        - name: start
-          in: query
-          description: Data inicial inclusiva; alias legado de `from`.
-          schema: { type: string, format: date }
-        - name: end
-          in: query
-          description: Data final inclusiva; alias legado de `to`.
-          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Source'
         - $ref: '#/components/parameters/From'
         - $ref: '#/components/parameters/To'
-        - $ref: '#/components/parameters/AsOf'
-        - $ref: '#/components/parameters/Dimension'
-        - name: last
-          in: query
-          description: Limita a resposta aos pontos mais recentes, até 20.000.
-          schema: { type: integer, minimum: 1, maximum: 20000 }
-        - name: include_revisions
-          in: query
-          description: Quando true, inclui revisões antigas e o campo `is_current`.
-          schema: { type: boolean, default: false }
       responses:
         '200':
-          description: Série legada.
-          headers:
-            Deprecation:
-              schema: { type: string, const: 'true' }
+          description: Sincronização concluída ou ignorada por lock concorrente.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/LegacySeriesResponse' }
+              schema: { $ref: '#/components/schemas/SyncResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '500': { $ref: '#/components/responses/InternalError' }
-  /v1/market-metrics/{code}/observations:
-    put:
-      tags: [Compatibilidade]
-      operationId: upsertLegacyMetricObservations
-      deprecated: true
-      summary: Importa observações pelo caminho legado
-      description: Mesmo contrato de `PUT /v1/indices/{code}/observations`.
-      parameters:
-        - $ref: '#/components/parameters/Code'
-        - $ref: '#/components/parameters/IdempotencyKey'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: '#/components/schemas/ObservationImport' }
-      responses:
-        '201':
-          description: Nova solicitação aplicada.
-          headers:
-            Idempotent-Replay:
-              schema: { type: string, const: 'false' }
+        '502':
+          description: Erro ao consultar ou persistir dados da fonte.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/UpsertResult' }
-        '200':
-          description: Repetição idempotente; devolve a resposta originalmente armazenada.
-          headers:
-            Idempotent-Replay:
-              schema: { type: string, const: 'true' }
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/UpsertResult' }
-        '400': { $ref: '#/components/responses/BadRequest' }
-        '401': { $ref: '#/components/responses/Unauthorized' }
-        '404': { $ref: '#/components/responses/NotFound' }
-        '409': { $ref: '#/components/responses/Conflict' }
+              schema: { $ref: '#/components/schemas/SyncResult' }
   /v1/selic:
     get:
       tags: [Selic]
@@ -486,9 +407,10 @@ paths:
   /v1/operations/sync/{source}:
     post:
       tags: [Operações]
-      operationId: runIndexSync
-      summary: Executa um worker de ingestão agora
+      operationId: runOperationsSyncAlias
+      summary: Alias operacional para executar um worker
       description: |
+        Alias para `POST /v1/indices/sync/{source}`.
         Executa `all`, `sgs`, `focus`, `tesouro`, `b3` ou `selic` no processo da API.
         A operação pode levar vários minutos. Se outro processo já detiver o lock da
         mesma fonte, retorna `status=skipped`. Uma falha de fonte retorna HTTP 502 e
@@ -572,7 +494,7 @@ paths:
       tags: [Workers]
       operationId: runWorkerAlias
       summary: Alias para execução manual de worker
-      description: Mesmo comportamento de `POST /v1/operations/sync/{source}`.
+      description: Mesmo comportamento de `POST /v1/indices/sync/{source}`.
       parameters:
         - $ref: '#/components/parameters/Source'
         - $ref: '#/components/parameters/From'
@@ -788,53 +710,6 @@ components:
         max_date: { type: string, format: date }
         source: { type: string }
       additionalProperties: false
-    LegacyObservation:
-      type: object
-      required: [ref_date, value, revision, recorded_at]
-      properties:
-        dim: { type: string }
-        ref_date: { type: string, format: date }
-        value: { type: string }
-        revision: { type: integer }
-        is_current: { type: boolean }
-        recorded_at: { type: string, format: date-time }
-    LegacySeries:
-      type: object
-      required: [code, group, name, unit, frequency, source, description, created_at, updated_at]
-      properties:
-        code: { type: string }
-        group: { type: integer }
-        name: { type: string }
-        unit: { type: string }
-        frequency: { type: string }
-        source: { type: string }
-        dim_name: { type: string }
-        description: { type: string }
-        created_at: { type: string, format: date-time }
-        updated_at: { type: string, format: date-time }
-        latest:
-          type: array
-          items: { $ref: '#/components/schemas/LegacyObservation' }
-    LegacySeriesList:
-      type: object
-      required: [items]
-      properties:
-        items:
-          type: array
-          items: { $ref: '#/components/schemas/LegacySeries' }
-    LegacySeriesResponse:
-      type: object
-      required: [metric, data, warnings]
-      properties:
-        metric: { $ref: '#/components/schemas/LegacySeries' }
-        as_of: { type: [string, 'null'], format: date }
-        data:
-          type: array
-          items: { $ref: '#/components/schemas/LegacyObservation' }
-        updated_at: { type: [string, 'null'], format: date-time }
-        warnings:
-          type: array
-          items: { type: string, enum: [no_observations, latest_observation_may_be_stale] }
     SelicPoint:
       type: object
       required: [reference_date, annual_rate, source, updated_at]

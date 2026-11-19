@@ -2,7 +2,7 @@
 
 ## Objetivo
 
-A API expõe o catálogo brasileiro de índices e séries econômicas, seus valores finais, séries históricas para gráficos, importação manual, histórico da Selic e operações dos workers. O contrato completo está em [`../api/openapi.yaml`](../api/openapi.yaml); a interface interativa está em `/swagger` e o YAML publicado pela aplicação em `/openapi.yaml`. A página usa Swagger UI 5.34.1 via unpkg; o navegador precisa acessar `unpkg.com` para carregar CSS e JavaScript. O contrato OpenAPI continua sendo servido localmente pela API.
+A API expõe o catálogo brasileiro de índices e séries econômicas, seus valores finais, séries históricas para gráficos, importação manual, histórico da Selic e operações dos workers. O contrato completo fica em `api/openapi.yaml` no repositório. Com o serviço ativo, a interface interativa está em `/swagger` e o YAML publicado pela aplicação em `/openapi.yaml`. A página usa Swagger UI 5.34.1 via unpkg; o navegador precisa acessar `unpkg.com` para carregar CSS e JavaScript. O contrato OpenAPI continua sendo servido localmente pela API.
 
 O backend não possui usuários ou papéis. Todas as rotas versionadas exigem o token estático configurado em `API_TOKEN`; `BEARER_TOKEN` é aceito como fallback de configuração. Envie o token em `Authorization: Bearer <token>` ou `X-API-Key: <token>`. As rotas públicas são `/healthz`, `/openapi.yaml` e `/swagger`.
 
@@ -17,14 +17,12 @@ O backend não possui usuários ou papéis. Todas as rotas versionadas exigem o 
 | `GET` | `/v1/indices/{code}/final` | Token | Retorna o último valor publicado por dimensão, opcionalmente limitado por `as_of`. |
 | `GET` | `/v1/indices/{code}/series` | Token | Retorna pontos ordenados para montar gráficos. |
 | `PUT` | `/v1/indices/{code}/observations` | Token | Importa observações ou registra correções com idempotência. |
-| `GET` | `/v1/market-metrics` | Token | Alias legado do catálogo. Retorna `Deprecation: true`. |
-| `GET` | `/v1/market-metrics/{code}` | Token | Alias legado da série, incluindo opção de revisões. Retorna `Deprecation: true`. |
-| `PUT` | `/v1/market-metrics/{code}/observations` | Token | Alias legado de importação de observações. |
 | `GET` | `/v1/selic` | Token | Lista Selic apurada, paginada e ordenada do mais recente para o mais antigo. |
 | `GET` | `/v1/selic/latest` | Token | Consulta o último ponto detalhado da Selic apurada. |
 | `GET` | `/v1/selic/{date}` | Token | Consulta Selic apurada em uma data ISO. |
 | `POST` | `/v1/selic/import` | Token | Importa CSV oficial em texto ou multipart. |
-| `POST` | `/v1/operations/sync/{source}` | Token | Dispara um worker (`all`, `sgs`, `focus`, `tesouro`, `b3`, `selic`). |
+| `POST` | `/v1/indices/sync/{source}` | Token | Dispara uma sincronização (`all`, `sgs`, `focus`, `tesouro`, `b3`, `selic`). |
+| `POST` | `/v1/operations/sync/{source}` | Token | Alias para disparo manual de sincronização. |
 | `GET` | `/v1/operations/sync-runs` | Token | Lê as execuções recentes do ledger, com filtro opcional por fonte. |
 | `GET` | `/v1/system/workers` | Token | Lista os cinco workers e as últimas 20 execuções. |
 | `GET` | `/v1/system/workers/runs` | Token | Alias do ledger de sincronização. |
@@ -80,7 +78,7 @@ A chamada exige o cabeçalho `Idempotency-Key` (máximo de 200 caracteres). A pr
 
 ## Operações e erros
 
-`POST /v1/operations/sync/{source}?from=2026-01-01&to=2026-11-18` executa uma carga pontual; datas são opcionais. Uma fonte com lock em uso retorna `200` e `status=skipped`. Falhas de consulta ou persistência retornam `502` com o resumo do worker. `GET /v1/operations/sync-runs?source=b3&limit=20` lista execuções, estados, intervalos, contagem de pontos e mensagens de erro.
+`POST /v1/indices/sync/{source}?from=2026-01-01&to=2026-11-18` executa uma carga pontual. `/v1/operations/sync/{source}` e `/v1/system/workers/{source}/run` também aceitam a chamada como aliases; datas são opcionais. Uma fonte com lock em uso retorna `200` e `status=skipped`. Falhas de consulta ou persistência retornam `502` com o resumo do worker. `GET /v1/operations/sync-runs?source=b3&limit=20` lista execuções, estados, intervalos, contagem de pontos e mensagens de erro.
 
 Os erros usam o envelope `{ "error": { "code": "...", "message": "..." } }`. Os códigos HTTP mais comuns são `400` (entrada inválida), `401` (token), `404` (série/valor), `409` (idempotência), `500` (falha interna) e `502` (falha de fonte externa).
 

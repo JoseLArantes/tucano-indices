@@ -18,8 +18,8 @@ O CSV usa `;` e deve conter `Tipo Título`, `Data Vencimento`, `Data Base` e pel
 
 ## Execução
 
-- API: `POST /v1/operations/sync/tesouro?from=YYYY-MM-DD&to=YYYY-MM-DD`.
-- Alias: `POST /v1/system/workers/tesouro/run`.
+- API: `POST /v1/indices/sync/tesouro?from=YYYY-MM-DD&to=YYYY-MM-DD`.
+- Aliases: `POST /v1/operations/sync/{source}` e `POST /v1/system/workers/tesouro/run`.
 - CLI: `make sync-indices SOURCE=tesouro ARGS="-from YYYY-MM-DD -to YYYY-MM-DD"`.
 - Scheduler: dias úteis, às 18:30 em `America/Sao_Paulo`.
 

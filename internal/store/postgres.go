@@ -262,23 +262,6 @@ func (s *Postgres) ObservationSeries(ctx context.Context, code string, q SeriesQ
 	return items, nil
 }
 
-func (s *Postgres) Revisions(ctx context.Context, code string, q SeriesQuery) ([]domain.Observation, error) {
-	if q.Limit <= 0 || q.Limit > 20000 {
-		q.Limit = 2000
-	}
-	rows, err := s.pool.Query(ctx, `SELECT series_code, dimension, ref_date::text, value::text, revision, is_current, source, recorded_at, attributes
-		FROM index_observations WHERE series_code = $1 AND ($2 = '' OR dimension = $2)
-		AND ($3::date IS NULL OR ref_date >= $3::date) AND ($4::date IS NULL OR ref_date <= $4::date)
-		AND ($5::date IS NULL OR ref_date <= $5::date)
-		ORDER BY dimension, ref_date, revision LIMIT $6 OFFSET $7`, strings.ToLower(strings.TrimSpace(code)), q.Dimension,
-		nullableDate(q.From), nullableDate(q.To), nullableDate(q.AsOf), q.Limit, max(q.Offset, 0))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return scanObservations(rows)
-}
-
 func (s *Postgres) MaxDate(ctx context.Context, code, dimension string) (time.Time, error) {
 	var date *time.Time
 	err := s.pool.QueryRow(ctx, `SELECT max(ref_date) FROM index_observations WHERE series_code = $1 AND is_current AND ($2 = '' OR dimension = $2)`,

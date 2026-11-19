@@ -28,7 +28,6 @@ type fakeDatabase struct {
 	latestAsOfErr     error
 	seriesErr         error
 	observationErr    error
-	revisionsErr      error
 	countErr          error
 	upsertErr         error
 	idempotentErr     error
@@ -101,10 +100,6 @@ func (db *fakeDatabase) ObservationSeries(_ context.Context, code string, query 
 	db.lastCode, db.lastQuery = code, query
 	return db.observations, db.observationErr
 }
-func (db *fakeDatabase) Revisions(_ context.Context, code string, query store.SeriesQuery) ([]domain.Observation, error) {
-	db.lastCode, db.lastQuery = code, query
-	return db.observations, db.revisionsErr
-}
 func (db *fakeDatabase) CountCurrent(_ context.Context, code, from, to string) (int64, error) {
 	db.lastCode, db.lastQuery.From, db.lastQuery.To = code, from, to
 	return db.count, db.countErr
@@ -154,6 +149,42 @@ func TestPublicHealthAndOpenAPIEndpoints(t *testing.T) {
 	response = request(handler, http.MethodGet, "/openapi.yaml", "", false)
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "application/yaml; charset=utf-8" || response.Body.String() != "openapi: 3.1.0\n" {
 		t.Fatalf("OpenAPI response = %d %#v %q", response.Code, response.Header(), response.Body.String())
+	}
+	response = request(handler, http.MethodGet, "/swagger", "", false)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+		t.Fatalf("Swagger UI response = %d %#v", response.Code, response.Header())
+	}
+}
+
+func TestAllVersionedEndpointsRequireToken(t *testing.T) {
+	handler := newHandler(newFakeDatabase())
+	endpoints := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/v1/indices"},
+		{http.MethodGet, "/v1/indices/ibov/final"},
+		{http.MethodGet, "/v1/indices/ibov/series"},
+		{http.MethodPut, "/v1/indices/ibov/observations"},
+		{http.MethodPost, "/v1/indices/sync/b3"},
+		{http.MethodGet, "/v1/selic"},
+		{http.MethodGet, "/v1/selic/latest"},
+		{http.MethodGet, "/v1/selic/2026-11-18"},
+		{http.MethodPost, "/v1/selic/import"},
+		{http.MethodGet, "/v1/operations/sync-runs"},
+		{http.MethodPost, "/v1/operations/sync/b3"},
+		{http.MethodGet, "/v1/system/workers"},
+		{http.MethodGet, "/v1/system/workers/runs"},
+		{http.MethodPost, "/v1/system/workers/b3/run"},
+	}
+
+	for _, endpoint := range endpoints {
+		t.Run(endpoint.method+" "+endpoint.path, func(t *testing.T) {
+			response := request(handler, endpoint.method, endpoint.path, "", false)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusUnauthorized, response.Body.String())
+			}
+		})
 	}
 }
 
@@ -258,28 +289,6 @@ func TestSeriesValidationPaginationAndWarnings(t *testing.T) {
 	db.seriesErr = errors.New("query failed")
 	if response := request(handler, http.MethodGet, "/v1/indices/ibov/series", "", true); response.Code != http.StatusBadRequest {
 		t.Fatalf("series query error status = %d", response.Code)
-	}
-}
-
-func TestLegacyRoutesAndRevisionPayload(t *testing.T) {
-	db := newFakeDatabase()
-	db.observations[0].IsCurrent = false
-	db.observations = append(db.observations, domain.Observation{SeriesCode: "ibov", Date: db.observations[0].Date, Value: "130001", Revision: 2, IsCurrent: true, RecordedAt: time.Now()})
-	handler := newHandler(db)
-	response := request(handler, http.MethodGet, "/v1/market-metrics?latest=true", "", true)
-	if response.Code != http.StatusOK || response.Header().Get("Deprecation") != "true" || !strings.Contains(response.Body.String(), `"code":"ibov"`) {
-		t.Fatalf("legacy catalog response = %d %#v %s", response.Code, response.Header(), response.Body.String())
-	}
-	response = request(handler, http.MethodGet, "/v1/market-metrics/ibov?include_revisions=true&last=10", "", true)
-	if response.Code != http.StatusOK || response.Header().Get("Deprecation") != "true" || !strings.Contains(response.Body.String(), `"is_current":false`) || !strings.Contains(response.Body.String(), `"is_current":true`) {
-		t.Fatalf("legacy revisions response = %d %s", response.Code, response.Body.String())
-	}
-	if response := request(handler, http.MethodGet, "/v1/market-metrics/ibov?last=0", "", true); response.Code != http.StatusBadRequest {
-		t.Fatalf("legacy invalid limit status = %d", response.Code)
-	}
-	db.revisionsErr = errors.New("revision query failed")
-	if response := request(handler, http.MethodGet, "/v1/market-metrics/ibov?include_revisions=true", "", true); response.Code != http.StatusInternalServerError {
-		t.Fatalf("legacy query error status = %d", response.Code)
 	}
 }
 
@@ -406,6 +415,9 @@ func TestOperationsAndWorkerEndpoints(t *testing.T) {
 	}
 	if response := request(handler, http.MethodPost, "/v1/operations/sync/b3?from=invalid", "", true); response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid manual sync date status = %d", response.Code)
+	}
+	if response := request(handler, http.MethodPost, "/v1/indices/sync/b3?from=invalid", "", true); response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid index sync date status = %d", response.Code)
 	}
 }
 

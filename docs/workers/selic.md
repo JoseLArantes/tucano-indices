@@ -25,12 +25,12 @@ A paginação começa em 1, com 100 linhas por página, e continua até que a re
 
 ## Execução
 
-- API: `POST /v1/operations/sync/selic?from=YYYY-MM-DD&to=YYYY-MM-DD`.
-- Alias: `POST /v1/system/workers/selic/run`.
+- API: `POST /v1/indices/sync/selic?from=YYYY-MM-DD&to=YYYY-MM-DD`.
+- Aliases: `POST /v1/operations/sync/{source}` e `POST /v1/system/workers/selic/run`.
 - CLI: `make sync-indices SOURCE=selic ARGS="-from YYYY-MM-DD -to YYYY-MM-DD"`.
 - Scheduler: dias úteis, às 20:30 em `America/Sao_Paulo`.
 
-O worker sincroniza somente `selic_apurada`; a meta e a Selic overnight continuam a cargo do worker SGS. Para consultas específicas, a API também expõe `GET /v1/selic`, `GET /v1/selic/latest` e `GET /v1/selic/{date}`. Importação CSV manual é descrita em [api.md](api.md).
+O worker sincroniza somente `selic_apurada`; a meta e a Selic overnight continuam a cargo do worker SGS. Para consultas específicas, a API também expõe `GET /v1/selic`, `GET /v1/selic/latest` e `GET /v1/selic/{date}`. Importação CSV manual é descrita na [referência da API](../api.md).
 
 ## Persistência e falhas
 

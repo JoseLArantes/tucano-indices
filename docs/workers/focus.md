@@ -32,8 +32,8 @@ O worker consome `value[]` e converte cada item em uma observação com `date=Da
 
 ## Execução
 
-- API: `POST /v1/operations/sync/focus?from=YYYY-MM-DD&to=YYYY-MM-DD`.
-- Alias: `POST /v1/system/workers/focus/run`.
+- API: `POST /v1/indices/sync/focus?from=YYYY-MM-DD&to=YYYY-MM-DD`.
+- Aliases: `POST /v1/operations/sync/{source}` e `POST /v1/system/workers/focus/run`.
 - CLI: `make sync-indices SOURCE=focus ARGS="-from YYYY-MM-DD -to YYYY-MM-DD"`.
 - Scheduler: dias úteis, às 07:00 em `America/Sao_Paulo`.
 

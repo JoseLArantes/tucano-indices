@@ -28,8 +28,8 @@ A agenda não expõe HTTP próprio. Acompanhamento e execução manual ficam na 
 
 - `GET /v1/system/workers` — workers e últimas 20 execuções;
 - `GET /v1/operations/sync-runs` — filtra execuções por fonte;
-- `POST /v1/operations/sync/{source}` — executa uma fonte imediatamente;
-- `POST /v1/system/workers/{source}/run` — alias de execução.
+- `POST /v1/indices/sync/{source}` — executa uma fonte imediatamente;
+- `POST /v1/operations/sync/{source}` e `POST /v1/system/workers/{source}/run` — aliases de execução.
 
 As rotas da API requerem Bearer token. Execuções automáticas e manuais compartilham os advisory locks por fonte, evitando sobreposição do mesmo worker.
 

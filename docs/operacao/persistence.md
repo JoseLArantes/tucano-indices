@@ -15,7 +15,7 @@ O valor fica em `NUMERIC(28,12)` e a API o serializa como string. `attributes` c
 
 A chave lógica de um ponto é `(series_code, dimension, ref_date)`. A tabela mantém todas as revisões em `(series_code, dimension, ref_date, revision)` e uma restrição parcial garante somente uma observação `is_current=true` por chave lógica.
 
-Na ingestão, um valor numericamente igual ao atual não gera revisão; atualiza `source` e `attributes`. Uma correção diferente desmarca a revisão vigente e insere a próxima revisão. O endpoint legado pode expor todas as revisões através de `include_revisions=true`.
+Na ingestão, um valor numericamente igual ao atual não gera revisão; atualiza `source` e `attributes`. Uma correção diferente desmarca a revisão vigente e insere a próxima revisão.
 
 ## Idempotência
 

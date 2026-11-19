@@ -1,7 +1,10 @@
 COMPOSE=docker compose -f docker-compose.yaml
 SOURCE?=all
 
-.PHONY: tidy build up down migrate-up sync-indices indices-scheduler
+.PHONY: tidy build up down migrate-up sync-indices indices-scheduler docs docs-dev
+
+docs-dev:
+	$(COMPOSE) --profile docs up docs
 
 tidy:
 	$(COMPOSE) --profile tools run --rm tooling go mod tidy
@@ -23,3 +26,6 @@ sync-indices:
 
 indices-scheduler:
 	$(COMPOSE) --profile indices-scheduler up --build -d index-scheduler
+
+docs:
+	$(COMPOSE) --profile docs up --build docs

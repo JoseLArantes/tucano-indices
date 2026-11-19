@@ -30,7 +30,6 @@ type database interface {
 	LatestAsOf(context.Context, string, string, string) ([]domain.Observation, error)
 	Series(context.Context, string, store.SeriesQuery) ([]domain.ChartPoint, error)
 	ObservationSeries(context.Context, string, store.SeriesQuery) ([]domain.Observation, error)
-	Revisions(context.Context, string, store.SeriesQuery) ([]domain.Observation, error)
 	CountCurrent(context.Context, string, string, string) (int64, error)
 	Upsert(context.Context, string, []domain.ObservationInput, string) (int, error)
 	IdempotentUpsert(context.Context, string, string, string, string, []domain.ObservationInput, string) (int, []byte, bool, error)
@@ -47,29 +46,6 @@ type Handler struct {
 
 //go:embed swagger.html
 var swaggerHTML []byte
-
-type legacySeries struct {
-	Code        string              `json:"code"`
-	Group       int16               `json:"group"`
-	Name        string              `json:"name"`
-	Unit        string              `json:"unit"`
-	Frequency   string              `json:"frequency"`
-	Source      string              `json:"source"`
-	Dimension   *string             `json:"dim_name,omitempty"`
-	Description string              `json:"description"`
-	CreatedAt   time.Time           `json:"created_at"`
-	UpdatedAt   time.Time           `json:"updated_at"`
-	Latest      []legacyObservation `json:"latest,omitempty"`
-}
-
-type legacyObservation struct {
-	Dimension  string    `json:"dim,omitempty"`
-	Date       string    `json:"ref_date"`
-	Value      string    `json:"value"`
-	Revision   int32     `json:"revision"`
-	IsCurrent  *bool     `json:"is_current,omitempty"`
-	RecordedAt time.Time `json:"recorded_at"`
-}
 
 func New(db database, syncer *ingest.Syncer, token, name string, openAPI []byte) *Handler {
 	return &Handler{db: db, syncer: syncer, token: token, name: name, openAPI: openAPI}
@@ -92,9 +68,7 @@ func (h *Handler) Router() http.Handler {
 		api.Get("/v1/indices/{code}/final", h.final)
 		api.Get("/v1/indices/{code}/series", h.series)
 		api.Put("/v1/indices/{code}/observations", h.upsert)
-		api.Get("/v1/market-metrics", h.listLegacy)
-		api.Get("/v1/market-metrics/{code}", h.seriesLegacy)
-		api.Put("/v1/market-metrics/{code}/observations", h.upsert)
+		api.Post("/v1/indices/sync/{source}", h.runSync)
 		api.Get("/v1/selic", h.selicList)
 		api.Get("/v1/selic/latest", h.selicLatest)
 		api.Get("/v1/selic/{date}", h.selicDate)
@@ -198,12 +172,6 @@ func (h *Handler) series(w http.ResponseWriter, r *http.Request) {
 	h.seriesWithNames(w, r, "from", "to", "limit")
 }
 
-func (h *Handler) seriesLegacy(w http.ResponseWriter, r *http.Request) {
-	if err := h.streamLegacySeries(w, r); err != nil {
-		writeError(w, http.StatusInternalServerError, "series_failed", err.Error())
-	}
-}
-
 func (h *Handler) seriesWithNames(w http.ResponseWriter, r *http.Request, fromName, toName, limitName string) {
 	code := chi.URLParam(r, "code")
 	series, err := h.db.GetSeries(r.Context(), code)
@@ -258,106 +226,6 @@ func (h *Handler) seriesWithNames(w http.ResponseWriter, r *http.Request, fromNa
 		warnings = append(warnings, "latest_observation_may_be_stale")
 	}
 	writeJSON(w, http.StatusOK, domain.SeriesResponse{Series: series, Data: points, Warnings: warnings})
-}
-
-func (h *Handler) streamLegacySeries(w http.ResponseWriter, r *http.Request) error {
-	code := chi.URLParam(r, "code")
-	series, err := h.db.GetSeries(r.Context(), code)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusNotFound, "series_not_found", "Series was not found")
-			return nil
-		}
-		return err
-	}
-	query := store.SeriesQuery{From: firstNonEmpty(r.URL.Query().Get("start"), r.URL.Query().Get("from")), To: firstNonEmpty(r.URL.Query().Get("end"), r.URL.Query().Get("to")), AsOf: r.URL.Query().Get("as_of"), Dimension: r.URL.Query().Get("dim"), Limit: 2000}
-	if query.Dimension == "*" {
-		query.Dimension = ""
-	}
-	for _, date := range []string{query.From, query.To, query.AsOf} {
-		if date != "" {
-			if err := validateDate(date); err != nil {
-				writeError(w, http.StatusBadRequest, "invalid_date", err.Error())
-				return nil
-			}
-		}
-	}
-	if raw := r.URL.Query().Get("last"); raw != "" {
-		query.Limit, err = strconv.Atoi(raw)
-		if err != nil || query.Limit < 1 || query.Limit > 20000 {
-			writeError(w, http.StatusBadRequest, "invalid_last", "last must be between 1 and 20000")
-			return nil
-		}
-	}
-	includeRevisions := strings.EqualFold(r.URL.Query().Get("include_revisions"), "true")
-	var observations []domain.Observation
-	if includeRevisions {
-		observations, err = h.db.Revisions(r.Context(), code, query)
-	} else {
-		observations, err = h.db.ObservationSeries(r.Context(), code, query)
-	}
-	if err != nil {
-		return err
-	}
-	data := make([]legacyObservation, 0, len(observations))
-	for _, observation := range observations {
-		item := toLegacyObservation(observation)
-		if includeRevisions {
-			current := observation.IsCurrent
-			item.IsCurrent = &current
-		}
-		data = append(data, item)
-	}
-	warnings := []string{}
-	if len(observations) == 0 {
-		warnings = append(warnings, "no_observations")
-	} else if isStale(series, latestObservationDate(observations)) {
-		warnings = append(warnings, "latest_observation_may_be_stale")
-	}
-	w.Header().Set("Deprecation", "true")
-	var asOf *string
-	if query.AsOf != "" {
-		asOf = &query.AsOf
-	}
-	var updatedAt *time.Time
-	if len(observations) > 0 {
-		latest := observations[len(observations)-1].RecordedAt
-		updatedAt = &latest
-	}
-	legacyMetric := toLegacySeries(series)
-	writeJSON(w, http.StatusOK, map[string]any{"metric": legacyMetric, "as_of": asOf, "data": data, "updated_at": updatedAt, "warnings": warnings})
-	return nil
-}
-
-func (h *Handler) listLegacy(w http.ResponseWriter, r *http.Request) {
-	group, err := parseIntDefault(r.URL.Query().Get("group"), 0)
-	if err != nil || group < 0 || group > 6 {
-		writeError(w, http.StatusBadRequest, "invalid_group", "group must be between 1 and 6")
-		return
-	}
-	seriesItems, err := h.db.ListSeries(r.Context(), group, splitCodes(r.URL.Query().Get("codes")))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "catalog_failed", err.Error())
-		return
-	}
-	items := make([]legacySeries, 0, len(seriesItems))
-	for _, series := range seriesItems {
-		entry := toLegacySeries(series)
-		if strings.EqualFold(r.URL.Query().Get("latest"), "true") {
-			latest, err := h.db.Latest(r.Context(), series.Code, "")
-			if err != nil {
-				writeError(w, http.StatusInternalServerError, "latest_failed", err.Error())
-				return
-			}
-			entry.Latest = make([]legacyObservation, 0, len(latest))
-			for _, observation := range latest {
-				entry.Latest = append(entry.Latest, toLegacyObservation(observation))
-			}
-		}
-		items = append(items, entry)
-	}
-	w.Header().Set("Deprecation", "true")
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (h *Handler) upsert(w http.ResponseWriter, r *http.Request) {
@@ -572,14 +440,6 @@ func selicPoint(point domain.Observation) map[string]any {
 		result[key] = value
 	}
 	return result
-}
-
-func toLegacySeries(series domain.Series) legacySeries {
-	return legacySeries{Code: series.Code, Group: series.Group, Name: series.Name, Unit: series.Unit, Frequency: series.Frequency, Source: series.Source, Dimension: series.Dimension, Description: series.Description, CreatedAt: series.CreatedAt, UpdatedAt: series.UpdatedAt}
-}
-
-func toLegacyObservation(item domain.Observation) legacyObservation {
-	return legacyObservation{Dimension: item.Dimension, Date: item.Date, Value: item.Value, Revision: item.Revision, RecordedAt: item.RecordedAt}
 }
 
 func toChartPoint(item domain.Observation) domain.ChartPoint {

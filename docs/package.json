@@ -1,0 +1,16 @@
+{
+  "name": "tucano-indices-docs",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Documentação do backend Tucano Indices.",
+  "scripts": {
+    "docs:dev": "vitepress dev . --host",
+    "docs:build": "vitepress build .",
+    "docs:preview": "vitepress preview . --host"
+  },
+  "devDependencies": {
+    "mermaid": "^12.3.0",
+    "vitepress": "^2.0.0-alpha.21"
+  }
+}
