@@ -11,7 +11,7 @@ Standalone Go backend for Brazilian financial market indexes and the economic se
 docker compose up --build -d api
 ```
 
-Compose runs the database migration before the API starts. The API listens on `http://localhost:8011`; health is available at `/healthz` and the OpenAPI file at `/openapi.yaml`.
+Compose runs the database migration before the API starts. The API listens on `http://localhost:8011`; health is available at `/healthz`, the interactive Swagger UI at `/swagger`, and the OpenAPI file at `/openapi.yaml`.
 
 Run a one-shot sync or start the long-running scheduler:
 
@@ -29,6 +29,8 @@ make sync-indices SOURCE=b3 ARGS="-from 1998-01-01 -to 2026-11-19"
 The scheduler runs on weekdays in `America/Sao_Paulo`: Focus at 07:00, Tesouro at 18:30, SGS at 19:30, observed Selic at 20:30, and B3 indexes at 21:00. Each worker is also available as a one-shot command and through the token-protected operations API.
 
 ## API
+
+The full OpenAPI 3.1 contract is in [`api/openapi.yaml`](api/openapi.yaml). Service and worker runbooks, including their data flow diagrams, are indexed in [`docs/`](docs/README.md).
 
 Send the token as `Authorization: Bearer <API_TOKEN>`.
 

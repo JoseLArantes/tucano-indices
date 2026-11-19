@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -44,6 +45,9 @@ type Handler struct {
 	openAPI []byte
 }
 
+//go:embed swagger.html
+var swaggerHTML []byte
+
 type legacySeries struct {
 	Code        string              `json:"code"`
 	Group       int16               `json:"group"`
@@ -77,6 +81,10 @@ func (h *Handler) Router() http.Handler {
 	r.Get("/openapi.yaml", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
 		_, _ = w.Write(h.openAPI)
+	})
+	r.Get("/swagger", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(swaggerHTML)
 	})
 	r.Group(func(api chi.Router) {
 		api.Use(tokenMiddleware(h.token))

@@ -2,145 +2,925 @@ openapi: 3.1.0
 info:
   title: Tucano Indices API
   version: 1.0.0
-  description: Read and chart Brazilian market indexes and economic reference series.
+  summary: API de índices financeiros brasileiros e séries econômicas de referência.
+  description: |
+    Serviço para consultar valores finais e séries históricas preparadas para gráficos,
+    importar correções idempotentes, acompanhar sincronizações e disparar workers.
+
+    Todas as rotas, exceto `/healthz`, `/openapi.yaml` e `/swagger`, exigem um token
+    estático enviado como `Authorization: Bearer <API_TOKEN>`. Também é aceito o
+    cabeçalho `X-API-Key`. Não existem contas de usuário nem níveis de acesso.
+
+    Os valores numéricos são strings decimais para evitar perda de precisão nos
+    consumidores. Datas de referência usam o calendário brasileiro e o formato ISO
+    `YYYY-MM-DD`.
+  contact:
+    name: Tucano Indices
+  license:
+    name: Proprietary
 servers:
-  - url: http://localhost:8011
+  - url: /
+    description: Mesmo host desta instância
 security:
   - bearerAuth: []
+  - apiKeyAuth: []
+tags:
+  - name: Saúde
+    description: Verificação pública da API e acesso à documentação.
+  - name: Catálogo
+    description: Cadastro e metadados das séries disponíveis.
+  - name: Séries
+    description: Valores finais e observações para visualização em gráficos.
+  - name: Escrita
+    description: Importação manual idempotente de observações.
+  - name: Compatibilidade
+    description: Rotas legadas de market-metrics mantidas para clientes existentes.
+  - name: Selic
+    description: Consulta e importação do histórico detalhado da Selic apurada.
+  - name: Operações
+    description: Execução manual de workers e leitura do ledger de sincronizações.
+  - name: Workers
+    description: Estado operacional e aliases de execução dos workers.
 paths:
   /healthz:
     get:
+      tags: [Saúde]
+      operationId: getHealth
+      summary: Verifica a API e o banco de dados
+      description: Rota pública usada por health checks. Retorna indisponível se o banco não responder em até dois segundos.
       security: []
-      summary: Service and database health
       responses:
-        '200': { description: Healthy }
-        '503': { description: Database unavailable }
+        '200':
+          description: API e banco disponíveis.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, service]
+                properties:
+                  status: { type: string, const: ok }
+                  service: { type: string, example: tucano-indices }
+              example: { status: ok, service: tucano-indices }
+        '503':
+          description: Banco de dados indisponível.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: { type: string, const: unavailable }
+  /openapi.yaml:
+    get:
+      tags: [Saúde]
+      operationId: getOpenAPISpec
+      summary: Baixa esta especificação OpenAPI
+      security: []
+      responses:
+        '200':
+          description: Documento OpenAPI YAML.
+          content:
+            application/yaml:
+              schema: { type: string }
+  /swagger:
+    get:
+      tags: [Saúde]
+      operationId: getSwaggerUI
+      summary: Abre a interface Swagger UI
+      description: Página interativa que carrega `/openapi.yaml` no mesmo host.
+      security: []
+      responses:
+        '200':
+          description: Página HTML da documentação interativa.
+          content:
+            text/html:
+              schema: { type: string }
   /v1/indices:
     get:
-      summary: List available financial series
+      tags: [Catálogo]
+      operationId: listIndices
+      summary: Lista as séries do catálogo
+      description: |
+        Sem filtros, retorna todos os códigos em ordem de grupo e código. O grupo `0`
+        significa todos os grupos. `latest=true` acrescenta a observação final por
+        dimensão em cada série; nesse modo `items` contém objetos de série com uma
+        propriedade `latest`.
       parameters:
-        - in: query
-          name: group
-          schema: { type: integer, minimum: 1, maximum: 6 }
-        - in: query
-          name: codes
-          description: Comma-separated stable series codes.
-          schema: { type: string }
-        - in: query
-          name: latest
+        - name: group
+          in: query
+          description: Grupo do catálogo; `0` não filtra por grupo.
+          schema: { type: integer, minimum: 0, maximum: 6, default: 0 }
+        - name: codes
+          in: query
+          description: Lista de códigos separados por vírgula; espaços e caixa são normalizados.
+          schema: { type: string, example: ibov,idiv,ifix }
+        - name: latest
+          in: query
+          description: Inclui os valores atuais por dimensão junto aos metadados.
           schema: { type: boolean, default: false }
       responses:
-        '200': { description: Series catalog }
-        '401': { description: Invalid API token }
+        '200':
+          description: Catálogo ou catálogo com valores finais.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/SeriesList'
+                  - $ref: '#/components/schemas/SeriesLatestList'
+              examples:
+                catalog:
+                  summary: Catálogo sem valores finais
+                  value:
+                    items:
+                      - code: ibov
+                        group: 4
+                        name: Ibovespa
+                        unit: pts
+                        frequency: daily
+                        source: b3_statistics:IBOVESPA
+                        description: Primary B3 equity benchmark
+                latest:
+                  summary: Catálogo com valor final
+                  value:
+                    items:
+                      - code: ibov
+                        group: 4
+                        name: Ibovespa
+                        unit: pts
+                        frequency: daily
+                        source: b3_statistics:IBOVESPA
+                        description: Primary B3 equity benchmark
+                        latest:
+                          - x: '2026-11-18'
+                            y: '158123.45'
+                            source: b3_statistics
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/indices/{code}/final:
     get:
-      summary: Latest published value for a series
+      tags: [Séries]
+      operationId: getFinalValue
+      summary: Consulta o valor final de uma série
+      description: |
+        Sem `dim`, retorna o ponto mais recente para cada dimensão cadastrada. Com
+        uma dimensão, retorna somente aquela. `dim=*` equivale a omitir a dimensão.
+        `as_of` limita a consulta a observações com data de referência menor ou igual
+        à data informada, permitindo reconstruir o valor conhecido até aquele dia.
       parameters:
-        - $ref: '#/components/parameters/code'
-        - in: query
-          name: dim
-          schema: { type: string }
-        - in: query
-          name: as_of
-          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Code'
+        - $ref: '#/components/parameters/Dimension'
+        - $ref: '#/components/parameters/AsOf'
       responses:
-        '200': { description: Final value or one latest value per dimension }
-        '404': { description: Series or value not found }
+        '200':
+          description: Valor final por série ou dimensão.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FinalResponse' }
+              example:
+                series: { code: ibov, group: 4, name: Ibovespa, unit: pts, frequency: daily, source: b3_statistics:IBOVESPA, description: Índice amplo de ações }
+                data:
+                  - { x: '2026-11-18', y: '158123.45', source: b3_statistics }
+                warnings: []
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/indices/{code}/series:
     get:
-      summary: Ordered observations for charting
+      tags: [Séries]
+      operationId: getIndexSeries
+      summary: Consulta observações ordenadas para um gráfico
+      description: |
+        Os pontos são devolvidos em ordem crescente de data. `last` define o tamanho
+        da janela mais recente e substitui `limit`. O limite máximo é 20.000 pontos
+        por resposta. Para resolução semanal ou mensal, cada período preserva a última
+        observação disponível. `start` e `end` são aliases de compatibilidade para
+        `from` e `to`.
       parameters:
-        - $ref: '#/components/parameters/code'
-        - in: query
-          name: from
+        - $ref: '#/components/parameters/Code'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - $ref: '#/components/parameters/AsOf'
+        - $ref: '#/components/parameters/Dimension'
+        - name: start
+          in: query
+          deprecated: true
+          description: Alias legado de `from`.
           schema: { type: string, format: date }
-        - in: query
-          name: to
+        - name: end
+          in: query
+          deprecated: true
+          description: Alias legado de `to`.
           schema: { type: string, format: date }
-        - in: query
-          name: as_of
-          schema: { type: string, format: date }
-        - in: query
-          name: dim
-          schema: { type: string }
-        - in: query
-          name: last
+        - name: limit
+          in: query
+          description: Número máximo de pontos; `last` substitui este valor.
+          schema: { type: integer, minimum: 1, maximum: 20000, default: 2000 }
+        - name: last
+          in: query
+          description: Retorna os N pontos mais recentes dentro dos demais filtros, apresentados em ordem crescente.
           schema: { type: integer, minimum: 1, maximum: 20000 }
-        - in: query
-          name: resolution
+        - name: resolution
+          in: query
+          description: Granularidade do gráfico; mantém o último ponto de cada semana ou mês.
           schema: { type: string, enum: [raw, weekly, monthly], default: raw }
       responses:
-        '200': { description: Ascending points in x/y chart format }
-        '404': { description: Series not found }
+        '200':
+          description: Pontos e avisos de qualidade ou atualidade.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SeriesResponse' }
+              example:
+                series: { code: ibov, group: 4, name: Ibovespa, unit: pts, frequency: daily, source: b3_statistics:IBOVESPA, description: Índice amplo de ações }
+                data:
+                  - { x: '2026-11-17', y: '157542.10', source: b3_statistics }
+                  - { x: '2026-11-18', y: '158123.45', source: b3_statistics }
+                warnings: []
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/indices/{code}/observations:
     put:
-      summary: Idempotent observation import or correction
+      tags: [Escrita]
+      operationId: upsertIndexObservations
+      summary: Importa ou corrige observações manualmente
+      description: |
+        A gravação exige uma chave de idempotência e um array `items` não vazio. Uma
+        repetição da mesma chave com o mesmo corpo reproduz a resposta original; usar
+        a mesma chave com outra operação ou conteúdo retorna conflito. Para a mesma
+        série, dimensão e data, uma alteração no valor numérico cria uma revisão e
+        mantém a anterior no histórico. Valores iguais atualizam origem/atributos sem
+        criar nova revisão.
       parameters:
-        - $ref: '#/components/parameters/code'
-        - in: header
-          name: Idempotency-Key
-          required: true
-          schema: { type: string, maxLength: 200 }
+        - $ref: '#/components/parameters/Code'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
+            schema: { $ref: '#/components/schemas/ObservationImport' }
+            example:
+              items:
+                - date: '2026-11-18'
+                  value: '158123.45'
+                  source: operator-correction
+                  attributes: { note: fechamento oficial }
+      responses:
+        '201':
+          description: Nova solicitação aplicada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpsertResult' }
+        '200':
+          description: Repetição idempotente; devolve a resposta originalmente armazenada.
+          headers:
+            Idempotent-Replay:
+              schema: { type: string, const: 'true' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpsertResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/market-metrics:
+    get:
+      tags: [Compatibilidade]
+      operationId: listLegacyMetrics
+      deprecated: true
+      summary: Lista o catálogo legado de market-metrics
+      description: "Compatibilidade com o serviço anterior. Prefira `GET /v1/indices`. A resposta inclui o cabeçalho `Deprecation: true`."
+      parameters:
+        - $ref: '#/components/parameters/Group'
+        - $ref: '#/components/parameters/Codes'
+        - name: latest
+          in: query
+          description: Acrescenta observações finais por dimensão.
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Séries no formato legado.
+          headers:
+            Deprecation:
+              schema: { type: string, const: 'true' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LegacySeriesList' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/market-metrics/{code}:
+    get:
+      tags: [Compatibilidade]
+      operationId: getLegacyMetricSeries
+      deprecated: true
+      summary: Consulta uma série no formato legado
+      description: "Prefira `GET /v1/indices/{code}/series`. A resposta inclui `Deprecation: true` e mantém o nome `ref_date` nos pontos."
+      parameters:
+        - $ref: '#/components/parameters/Code'
+        - name: start
+          in: query
+          description: Data inicial inclusiva; alias legado de `from`.
+          schema: { type: string, format: date }
+        - name: end
+          in: query
+          description: Data final inclusiva; alias legado de `to`.
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - $ref: '#/components/parameters/AsOf'
+        - $ref: '#/components/parameters/Dimension'
+        - name: last
+          in: query
+          description: Limita a resposta aos pontos mais recentes, até 20.000.
+          schema: { type: integer, minimum: 1, maximum: 20000 }
+        - name: include_revisions
+          in: query
+          description: Quando true, inclui revisões antigas e o campo `is_current`.
+          schema: { type: boolean, default: false }
+      responses:
+        '200':
+          description: Série legada.
+          headers:
+            Deprecation:
+              schema: { type: string, const: 'true' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LegacySeriesResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/market-metrics/{code}/observations:
+    put:
+      tags: [Compatibilidade]
+      operationId: upsertLegacyMetricObservations
+      deprecated: true
+      summary: Importa observações pelo caminho legado
+      description: Mesmo contrato de `PUT /v1/indices/{code}/observations`.
+      parameters:
+        - $ref: '#/components/parameters/Code'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ObservationImport' }
+      responses:
+        '201':
+          description: Nova solicitação aplicada.
+          headers:
+            Idempotent-Replay:
+              schema: { type: string, const: 'false' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpsertResult' }
+        '200':
+          description: Repetição idempotente; devolve a resposta originalmente armazenada.
+          headers:
+            Idempotent-Replay:
+              schema: { type: string, const: 'true' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpsertResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /v1/selic:
+    get:
+      tags: [Selic]
+      operationId: listSelicRates
+      summary: Lista observações da Selic apurada
+      description: Retorna os itens do mais recente para o mais antigo. `total` é a contagem total filtrada antes da paginação.
+      parameters:
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000, default: 100 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Página do histórico de Selic.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SelicListResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/selic/latest:
+    get:
+      tags: [Selic]
+      operationId: getLatestSelicRate
+      summary: Consulta a observação mais recente da Selic
+      responses:
+        '200':
+          description: Valor final detalhado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SelicPoint' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /v1/selic/{date}:
+    get:
+      tags: [Selic]
+      operationId: getSelicRateByDate
+      summary: Consulta a Selic apurada em uma data
+      parameters:
+        - name: date
+          in: path
+          required: true
+          description: Data de cotação no formato ISO.
+          schema: { type: string, format: date, example: '2026-11-18' }
+      responses:
+        '200':
+          description: Valor detalhado da data solicitada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SelicPoint' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/selic/import:
+    post:
+      tags: [Selic]
+      operationId: importSelicCSV
+      summary: Importa CSV oficial da Selic
+      description: |
+        Aceita o CSV separado por ponto e vírgula no corpo ou um multipart com campo
+        `file`. O arquivo deve conter cabeçalho `Data` e `Taxa (% a.a.)`. A chave de
+        idempotência deve ser nova para cada conteúdo distinto. O limite de leitura é
+        20 MiB.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: { type: string, format: binary }
+          application/octet-stream:
+            schema: { type: string, format: binary }
+          multipart/form-data:
             schema:
               type: object
-              required: [items]
+              required: [file]
               properties:
-                items:
-                  type: array
-                  items: { $ref: '#/components/schemas/ObservationInput' }
+                file: { type: string, format: binary }
       responses:
-        '201': { description: Observations accepted }
-        '409': { description: Idempotency key reused with a different request }
+        '200':
+          description: Importação aplicada ou repetição idempotente.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SelicImportResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalError' }
   /v1/operations/sync/{source}:
     post:
-      summary: Run an ingestion worker immediately
+      tags: [Operações]
+      operationId: runIndexSync
+      summary: Executa um worker de ingestão agora
+      description: |
+        Executa `all`, `sgs`, `focus`, `tesouro`, `b3` ou `selic` no processo da API.
+        A operação pode levar vários minutos. Se outro processo já detiver o lock da
+        mesma fonte, retorna `status=skipped`. Uma falha de fonte retorna HTTP 502 e
+        um resumo com status `failed`.
       parameters:
-        - in: path
-          name: source
-          required: true
-          schema: { type: string, enum: [all, sgs, focus, tesouro, b3, selic] }
-        - in: query
-          name: from
-          schema: { type: string, format: date }
-        - in: query
-          name: to
-          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Source'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
       responses:
-        '200': { description: Worker run summary }
+        '200':
+          description: Sincronização concluída ou ignorada por lock concorrente.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502':
+          description: Erro ao consultar ou persistir dados da fonte.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncResult' }
   /v1/operations/sync-runs:
     get:
-      summary: List recent ingestion runs
+      tags: [Operações]
+      operationId: listSyncRuns
+      summary: Lista execuções recentes dos workers
       parameters:
-        - in: query
-          name: source
-          schema: { type: string }
-        - in: query
-          name: limit
+        - name: source
+          in: query
+          description: Filtra pelo nome da fonte, por exemplo `b3` ou `sgs`.
+          schema: { type: string, enum: [sgs, focus, tesouro, b3, selic] }
+        - name: limit
+          in: query
+          description: Quantidade de execuções retornadas; valores fora de 1 a 200 usam o padrão 50.
           schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
       responses:
-        '200': { description: Recent run ledger }
+        '200':
+          description: Execuções mais recentes primeiro.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncRunList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/system/workers:
+    get:
+      tags: [Workers]
+      operationId: getWorkerStatus
+      summary: Lista workers e as últimas execuções
+      description: O payload inclui os nomes dos workers configurados e as últimas 20 execuções do ledger.
+      responses:
+        '200':
+          description: Estado operacional resumido.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkerStatus' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/system/workers/runs:
+    get:
+      tags: [Workers]
+      operationId: listWorkerRuns
+      summary: Alias para o ledger de sincronizações
+      description: Mesmo comportamento de `GET /v1/operations/sync-runs`.
+      parameters:
+        - name: source
+          in: query
+          schema: { type: string, enum: [sgs, focus, tesouro, b3, selic] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        '200':
+          description: Execuções recentes.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncRunList' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /v1/system/workers/{source}/run:
+    post:
+      tags: [Workers]
+      operationId: runWorkerAlias
+      summary: Alias para execução manual de worker
+      description: Mesmo comportamento de `POST /v1/operations/sync/{source}`.
+      parameters:
+        - $ref: '#/components/parameters/Source'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+      responses:
+        '200':
+          description: Execução concluída ou ignorada por lock concorrente.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '502':
+          description: Erro na execução.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SyncResult' }
 components:
   securitySchemes:
     bearerAuth:
       type: http
       scheme: bearer
+      bearerFormat: API token
+      description: Informe o valor de `API_TOKEN` sem o prefixo; Swagger UI acrescenta `Bearer` automaticamente.
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: Alternativa ao cabeçalho Authorization Bearer.
   parameters:
-    code:
-      in: path
+    Code:
       name: code
+      in: path
       required: true
+      description: Código estável da série, por exemplo `ibov`, `ipca` ou `focus_selic`.
+      schema: { type: string, minLength: 1, example: ibov }
+    Group:
+      name: group
+      in: query
+      description: Grupo do catálogo; `0` lista todos.
+      schema: { type: integer, minimum: 0, maximum: 6, default: 0 }
+    Codes:
+      name: codes
+      in: query
+      description: Códigos separados por vírgula.
       schema: { type: string }
+    From:
+      name: from
+      in: query
+      description: Data de referência inicial inclusiva.
+      schema: { type: string, format: date, example: '2026-01-01' }
+    To:
+      name: to
+      in: query
+      description: Data de referência final inclusiva.
+      schema: { type: string, format: date, example: '2026-11-18' }
+    AsOf:
+      name: as_of
+      in: query
+      description: Exclui observações posteriores a esta data.
+      schema: { type: string, format: date, example: '2026-11-18' }
+    Dimension:
+      name: dim
+      in: query
+      description: Filtra uma dimensão, como ano de vencimento ou ano-alvo. `*` significa todas.
+      schema: { type: string, example: '2028' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Chave única de até 200 caracteres. Reutilize somente para repetir o mesmo conteúdo e operação.
+      schema: { type: string, minLength: 1, maxLength: 200, example: import-ibov-20261118 }
+    Source:
+      name: source
+      in: path
+      required: true
+      description: Fonte de ingestão ou conjunto completo de fontes.
+      schema: { type: string, enum: [all, sgs, focus, tesouro, b3, selic] }
+  responses:
+    BadRequest:
+      description: Parâmetros, datas, payload ou chave inválidos.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Unauthorized:
+      description: Token ausente ou inválido.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+          example: { error: { code: unauthorized, message: A valid API token is required } }
+    NotFound:
+      description: Código ou observação não encontrado.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    Conflict:
+      description: Chave de idempotência reutilizada com outro conteúdo ou operação.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+    InternalError:
+      description: Falha interna ao consultar ou gravar dados.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
   schemas:
+    Series:
+      type: object
+      required: [code, group, name, unit, frequency, source, description, created_at, updated_at]
+      properties:
+        code: { type: string, example: ibov }
+        group: { type: integer, minimum: 1, maximum: 6, example: 4 }
+        name: { type: string, example: Ibovespa }
+        unit: { type: string, example: pts }
+        frequency: { type: string, enum: [daily, weekly, monthly, quarterly, annual], example: daily }
+        source: { type: string, example: b3_statistics:IBOVESPA }
+        dimension: { type: [string, 'null'], description: Nome da dimensão, quando a série possui dimensões. Exemplo `target_year`. }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SeriesList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Series' }
+    SeriesWithLatest:
+      allOf:
+        - $ref: '#/components/schemas/Series'
+        - type: object
+          required: [latest]
+          properties:
+            latest:
+              type: array
+              items: { $ref: '#/components/schemas/ChartPoint' }
+    SeriesLatestList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SeriesWithLatest' }
+    ChartPoint:
+      type: object
+      required: [x, y]
+      properties:
+        x: { type: string, format: date, description: Data de referência. }
+        y: { type: string, pattern: '^-?[0-9]+(\.[0-9]+)?$', description: Valor decimal exato serializado como texto. }
+        dimension: { type: string, description: Categoria da observação quando a série é multidimensional. }
+        source: { type: string, description: Identificador da origem do ponto. }
+        attributes: { type: object, additionalProperties: true, description: Metadados adicionais da observação. }
+    FinalResponse:
+      type: object
+      required: [series, data, warnings]
+      properties:
+        series: { $ref: '#/components/schemas/Series' }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ChartPoint' }
+        warnings:
+          type: array
+          items: { type: string, enum: [latest_observation_may_be_stale] }
+    SeriesResponse:
+      type: object
+      required: [series, data, warnings]
+      properties:
+        series: { $ref: '#/components/schemas/Series' }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/ChartPoint' }
+        warnings:
+          type: array
+          items: { type: string, enum: [no_observations, latest_observation_may_be_stale] }
     ObservationInput:
       type: object
       required: [date, value]
       properties:
-        date: { type: string, format: date }
-        value: { type: string, description: Decimal string, example: '131234.56000000' }
-        dimension: { type: string }
-        source: { type: string }
+        date: { type: string, format: date, example: '2026-11-18' }
+        value: { type: string, pattern: '^-?[0-9]+(\.[0-9]+)?$', example: '158123.45000000' }
+        dimension: { type: string, example: '2028' }
+        source: { type: string, description: Origem da observação; usa o valor padrão da operação se omitida. }
         attributes: { type: object, additionalProperties: true }
+    ObservationImport:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/ObservationInput' }
+    Observation:
+      type: object
+      required: [series_code, date, value, revision, is_current, source, recorded_at]
+      properties:
+        series_code: { type: string }
+        dimension: { type: string }
+        date: { type: string, format: date }
+        value: { type: string, description: Valor decimal exato como texto. }
+        revision: { type: integer, minimum: 1 }
+        is_current: { type: boolean }
+        source: { type: string }
+        recorded_at: { type: string, format: date-time }
+        attributes: { type: object, additionalProperties: true }
+    UpsertResult:
+      type: object
+      properties:
+        observations_received: { type: integer }
+        observations_revised: { type: integer }
+        rows_parsed: { type: integer }
+        rows_upserted: { type: integer }
+        min_date: { type: string, format: date }
+        max_date: { type: string, format: date }
+        source: { type: string }
+      additionalProperties: false
+    LegacyObservation:
+      type: object
+      required: [ref_date, value, revision, recorded_at]
+      properties:
+        dim: { type: string }
+        ref_date: { type: string, format: date }
+        value: { type: string }
+        revision: { type: integer }
+        is_current: { type: boolean }
+        recorded_at: { type: string, format: date-time }
+    LegacySeries:
+      type: object
+      required: [code, group, name, unit, frequency, source, description, created_at, updated_at]
+      properties:
+        code: { type: string }
+        group: { type: integer }
+        name: { type: string }
+        unit: { type: string }
+        frequency: { type: string }
+        source: { type: string }
+        dim_name: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        latest:
+          type: array
+          items: { $ref: '#/components/schemas/LegacyObservation' }
+    LegacySeriesList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/LegacySeries' }
+    LegacySeriesResponse:
+      type: object
+      required: [metric, data, warnings]
+      properties:
+        metric: { $ref: '#/components/schemas/LegacySeries' }
+        as_of: { type: [string, 'null'], format: date }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/LegacyObservation' }
+        updated_at: { type: [string, 'null'], format: date-time }
+        warnings:
+          type: array
+          items: { type: string, enum: [no_observations, latest_observation_may_be_stale] }
+    SelicPoint:
+      type: object
+      required: [reference_date, annual_rate, source, updated_at]
+      properties:
+        reference_date: { type: string, format: date }
+        annual_rate: { type: string, description: Taxa anual em percentual. }
+        source: { type: string }
+        updated_at: { type: string, format: date-time }
+        daily_factor: { type: string }
+        financial_volume: { type: string }
+        operations_count: { type: integer }
+        average_rate: { type: string }
+        median_rate: { type: string }
+        modal_rate: { type: string }
+        std_deviation: { type: string }
+        kurtosis_index: { type: string }
+      additionalProperties: true
+    SelicListResponse:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SelicPoint' }
+        total: { type: integer, format: int64 }
+        limit: { type: integer }
+        offset: { type: integer }
+    SelicImportResult:
+      type: object
+      required: [rows_parsed, rows_upserted, min_date, max_date, source]
+      properties:
+        rows_parsed: { type: integer }
+        rows_upserted: { type: integer }
+        min_date: { type: string, format: date }
+        max_date: { type: string, format: date }
+        source: { type: string, example: csv_import }
+    SyncResult:
+      type: object
+      required: [source, status, series, points_seen, points_stored]
+      properties:
+        source: { type: string, enum: [all, sgs, focus, tesouro, b3, selic] }
+        status: { type: string, enum: [running, succeeded, failed, skipped] }
+        series:
+          type: array
+          items: { type: string }
+        points_seen: { type: integer }
+        points_stored: { type: integer }
+        error: { type: string }
+    SyncRun:
+      type: object
+      required: [id, source, status, started_at, points_seen, points_stored]
+      properties:
+        id: { type: string, format: uuid }
+        source: { type: string }
+        status: { type: string, enum: [running, succeeded, failed, skipped] }
+        started_at: { type: string, format: date-time }
+        finished_at: { type: [string, 'null'], format: date-time }
+        from: { type: [string, 'null'], format: date }
+        to: { type: [string, 'null'], format: date }
+        points_seen: { type: integer }
+        points_stored: { type: integer }
+        error: { type: string }
+    SyncRunList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/SyncRun' }
+    WorkerStatus:
+      type: object
+      required: [workers, runs]
+      properties:
+        workers:
+          type: array
+          items: { type: string, enum: [sgs, focus, tesouro, b3, selic] }
+        runs:
+          type: array
+          items: { $ref: '#/components/schemas/SyncRun' }
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: invalid_date }
+            message: { type: string, example: date must use YYYY-MM-DD }
