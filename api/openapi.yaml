@@ -1,0 +1,146 @@
+openapi: 3.1.0
+info:
+  title: Tucano Indices API
+  version: 1.0.0
+  description: Read and chart Brazilian market indexes and economic reference series.
+servers:
+  - url: http://localhost:8011
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      security: []
+      summary: Service and database health
+      responses:
+        '200': { description: Healthy }
+        '503': { description: Database unavailable }
+  /v1/indices:
+    get:
+      summary: List available financial series
+      parameters:
+        - in: query
+          name: group
+          schema: { type: integer, minimum: 1, maximum: 6 }
+        - in: query
+          name: codes
+          description: Comma-separated stable series codes.
+          schema: { type: string }
+        - in: query
+          name: latest
+          schema: { type: boolean, default: false }
+      responses:
+        '200': { description: Series catalog }
+        '401': { description: Invalid API token }
+  /v1/indices/{code}/final:
+    get:
+      summary: Latest published value for a series
+      parameters:
+        - $ref: '#/components/parameters/code'
+        - in: query
+          name: dim
+          schema: { type: string }
+        - in: query
+          name: as_of
+          schema: { type: string, format: date }
+      responses:
+        '200': { description: Final value or one latest value per dimension }
+        '404': { description: Series or value not found }
+  /v1/indices/{code}/series:
+    get:
+      summary: Ordered observations for charting
+      parameters:
+        - $ref: '#/components/parameters/code'
+        - in: query
+          name: from
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          schema: { type: string, format: date }
+        - in: query
+          name: as_of
+          schema: { type: string, format: date }
+        - in: query
+          name: dim
+          schema: { type: string }
+        - in: query
+          name: last
+          schema: { type: integer, minimum: 1, maximum: 20000 }
+        - in: query
+          name: resolution
+          schema: { type: string, enum: [raw, weekly, monthly], default: raw }
+      responses:
+        '200': { description: Ascending points in x/y chart format }
+        '404': { description: Series not found }
+  /v1/indices/{code}/observations:
+    put:
+      summary: Idempotent observation import or correction
+      parameters:
+        - $ref: '#/components/parameters/code'
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema: { type: string, maxLength: 200 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items: { $ref: '#/components/schemas/ObservationInput' }
+      responses:
+        '201': { description: Observations accepted }
+        '409': { description: Idempotency key reused with a different request }
+  /v1/operations/sync/{source}:
+    post:
+      summary: Run an ingestion worker immediately
+      parameters:
+        - in: path
+          name: source
+          required: true
+          schema: { type: string, enum: [all, sgs, focus, tesouro, b3, selic] }
+        - in: query
+          name: from
+          schema: { type: string, format: date }
+        - in: query
+          name: to
+          schema: { type: string, format: date }
+      responses:
+        '200': { description: Worker run summary }
+  /v1/operations/sync-runs:
+    get:
+      summary: List recent ingestion runs
+      parameters:
+        - in: query
+          name: source
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+      responses:
+        '200': { description: Recent run ledger }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    code:
+      in: path
+      name: code
+      required: true
+      schema: { type: string }
+  schemas:
+    ObservationInput:
+      type: object
+      required: [date, value]
+      properties:
+        date: { type: string, format: date }
+        value: { type: string, description: Decimal string, example: '131234.56000000' }
+        dimension: { type: string }
+        source: { type: string }
+        attributes: { type: object, additionalProperties: true }

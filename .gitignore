@@ -1,0 +1,12 @@
+bin/
+dist/
+coverage.out
+*.exe
+.env
+keys/*.pem
+!keys/.gitkeep
+.idea/
+.vscode/
+.DS_Store
+**/node_modules
+data
