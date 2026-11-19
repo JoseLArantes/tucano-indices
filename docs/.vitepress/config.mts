@@ -1,12 +1,15 @@
 import { defineConfig } from 'vitepress'
 
+const base = process.env.DOCS_BASE || '/'
+
 export default defineConfig({
+  base,
   lang: 'pt-BR',
   title: 'Tucano Indices',
   description:
     'Documentação do backend de índices e séries econômicas do mercado brasileiro.',
   srcExclude: ['README.md'],
-  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }]],
+  head: [['link', { rel: 'icon', type: 'image/svg+xml', href: `${base}logo.svg` }]],
   markdown: {
     config(md) {
       const fence = md.renderer.rules.fence

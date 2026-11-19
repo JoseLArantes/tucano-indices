@@ -2,12 +2,8 @@
 layout: home
 
 hero:
-  name: Tucano Indices
   text: Índices e séries econômicas do mercado brasileiro
-  tagline: Backend Go para catálogo, histórico revisado e sincronização de dados do BCB, Tesouro Direto e B3.
-  image:
-    src: /logo.svg
-    alt: Tucano Indices
+  tagline: Backend REST API para catálogo, histórico revisado e sincronização de dados do BCB, Tesouro Direto e B3.
   actions:
     - theme: brand
       text: Começar pela introdução

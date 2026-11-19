@@ -1,0 +1,16 @@
+tucano-indices {{ .Chart.AppVersion }} instalado.
+
+{{- if .Values.api.enabled }}
+API interna:
+  http://{{ include "tucano-indices.fullname" . }}-api.{{ .Release.Namespace }}.svc:{{ .Values.api.service.port }}
+
+Para encaminhar a API localmente:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "tucano-indices.fullname" . }}-api 8080:{{ .Values.api.service.port }}
+
+O endpoint /healthz está disponível sem autenticação. Os demais endpoints exigem Authorization: Bearer <API_TOKEN>.
+{{- end }}
+
+O Secret {{ .Values.secrets.existingSecret }} deve conter as chaves DATABASE_URL e API_TOKEN.
+{{- if .Values.migrations.enabled }}
+As migrations são executadas pelo hook Helm antes de instalar ou atualizar a aplicação.
+{{- end }}

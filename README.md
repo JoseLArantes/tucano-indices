@@ -1,73 +1,138 @@
-# Tucano Indices
+# Tucano Índices - Mercado Financeiro
 
-Standalone Go backend for Brazilian financial market indexes and the economic series used as market references. The service has no user accounts or roles; one configured API token protects its API.
+[![Go 1.27.4](https://img.shields.io/badge/Go-1.27.4-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![PostgreSQL 18](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker Compose](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+[![Helm 3](https://img.shields.io/badge/Helm-3-0F1689?logo=helm&logoColor=white)](https://helm.sh/)
+[![VitePress](https://img.shields.io/badge/Docs-VitePress-646CFF?logo=vitepress&logoColor=white)](https://vitepress.dev/)
+[![Licença MIT](https://img.shields.io/badge/Licen%C3%A7a-MIT-green.svg)](LICENSE)
 
-## Run locally
+Backend dedicado a reunir e disponibilizar índices financeiros e indicadores econômicos do Brasil. A API oferece valores mais recentes e séries históricas prontas para aplicações, análises e gráficos.
 
-1. Set `API_TOKEN` in `.env` (or export it in the shell).
-2. Start PostgreSQL, run the migration, and start the API:
+## O que você encontra aqui
 
-```sh
-docker compose up --build -d api
+- **Índices em um só catálogo:** indicadores de juros, inflação, atividade econômica, câmbio e mercado financeiro.
+- **Valores atuais e histórico:** consultas simples para obter o valor final ou uma série temporal.
+- **Dados atualizados automaticamente:** sincronizações programadas e execução manual dos workers.
+- **Histórico de revisões:** correções recebidas das fontes são registradas sem apagar os valores anteriores.
+- **Integração direta:** API HTTP protegida por token, sem contas de usuário ou níveis de acesso.
+
+O projeto é um backend; não inclui interface de usuário ou dashboard.
+
+## Indicadores e fontes
+
+O diagrama resume os principais grupos do catálogo e as fontes públicas usadas para sincronizá-los:
+
+```mermaid
+flowchart LR
+  subgraph fontes["Fontes públicas"]
+    BCB["Banco Central<br/>SGS e NovoSelic"]
+    Focus["Banco Central<br/>Boletim Focus"]
+    Tesouro["Tesouro Transparente"]
+    B3["B3"]
+  end
+
+  subgraph catalogo["Tucano Índices"]
+    Juros["Juros<br/>Selic e CDI"]
+    Inflacao["Inflação<br/>IPCA, IPCA-15, INPC e IGP-M"]
+    Macro["Atividade e câmbio<br/>IBC-Br e PTAX"]
+    Expectativas["Expectativas<br/>IPCA, Selic e câmbio"]
+    Publicos["Títulos públicos<br/>Taxas indicativas"]
+    Mercado["Mercado financeiro<br/>Ibovespa, IBrX, IDIV, IFIX e índices setoriais"]
+  end
+
+  BCB --> Juros
+  BCB --> Inflacao
+  BCB --> Macro
+  Focus --> Expectativas
+  Tesouro --> Publicos
+  B3 --> Mercado
 ```
 
-Compose runs the database migration before the API starts. The API listens on `http://localhost:8011`; health is available at `/healthz`, the interactive Swagger UI at `/swagger`, and the OpenAPI file at `/openapi.yaml`.
+A frequência e o histórico disponíveis dependem da série e da fonte de origem.
 
-Run a one-shot sync or start the long-running scheduler:
+## Documentação
+
+A [documentação online](https://joselarantes.github.io/tucano-indices/) explica a API, as fontes de dados e a operação dos workers. A especificação também está disponível em [OpenAPI](api/openapi.yaml).
+
+## Informações técnicas
+
+### Executar localmente
+
+Requisitos: Docker e Docker Compose.
+
+Os alvos `make` do projeto executam suas ferramentas dentro de containers Docker Compose; não é necessário instalar Go, Node.js ou golangci-lint no host.
+
+Crie `.env` a partir de `.env.example` usando seu editor de texto e defina um valor próprio para `API_TOKEN`. Em seguida, inicie a API e os serviços necessários:
+
+```sh
+make up
+```
+
+A API ficará disponível em `http://localhost:8011`.
+
+- Verificação de saúde: [http://localhost:8011/healthz](http://localhost:8011/healthz)
+- Swagger UI: [http://localhost:8011/swagger](http://localhost:8011/swagger)
+- Especificação OpenAPI: [http://localhost:8011/openapi.yaml](http://localhost:8011/openapi.yaml)
+
+As rotas de dados e operações exigem o cabeçalho `Authorization: Bearer <API_TOKEN>`. Por exemplo:
+
+```sh
+docker compose exec api curl -H 'Authorization: Bearer <API_TOKEN>' \
+  http://localhost:8080/v1/indices
+```
+
+### Endpoints principais
+
+| Método | Endpoint | Uso |
+|---|---|---|
+| `GET` | `/v1/indices` | Lista as séries do catálogo. |
+| `GET` | `/v1/indices/{code}/final` | Consulta o valor mais recente de uma série. |
+| `GET` | `/v1/indices/{code}/series` | Obtém dados históricos para gráficos. |
+| `POST` | `/v1/operations/sync/{source}` | Solicita a sincronização de uma fonte. |
+| `GET` | `/v1/operations/sync-runs` | Consulta o histórico de sincronizações. |
+
+A especificação OpenAPI contém os parâmetros, formatos, filtros e respostas completos.
+
+### Sincronização e operação
+
+O scheduler executa os workers em dias úteis no fuso `America/Sao_Paulo`. Também é possível solicitar uma sincronização manual:
 
 ```sh
 make sync-indices SOURCE=all
+make sync-indices SOURCE=b3 ARGS="-from 2024-01-01 -to 2024-12-31"
+```
+
+Para executar o scheduler localmente:
+
+```sh
 make indices-scheduler
 ```
 
-For a historical backfill, pass a date window:
+Os runbooks de sincronização e de cada worker estão na [documentação](https://joselarantes.github.io/tucano-indices/).
+
+### Arquitetura
+
+O serviço é implementado em Go, usa PostgreSQL para armazenar séries, revisões e execuções de sincronização, e inclui migrations para preparar o banco. Docker Compose oferece um ambiente local; o chart Helm em [deploy/tucano-indices](deploy/tucano-indices) permite instalação em Kubernetes. A documentação é gerada com VitePress e publicada no GitHub Pages.
+
+Os pontos são identificados por série, dimensão e data de referência. Repetições idênticas são idempotentes; correções criam uma nova revisão, preservando o histórico anterior. Os workers mantêm um registro das execuções e usam locks no banco para evitar sincronizações concorrentes da mesma fonte.
+
+### Desenvolvimento
+
+Testes:
 
 ```sh
-make sync-indices SOURCE=b3 ARGS="-from 1998-01-01 -to 2026-11-19"
+make test
 ```
 
-The scheduler runs on weekdays in `America/Sao_Paulo`: Focus at 07:00, Tesouro at 18:30, SGS at 19:30, observed Selic at 20:30, and B3 indexes at 21:00. Each worker is also available as a one-shot command and through the token-protected operations API.
+Documentação:
 
-## API
+```sh
+make docs
+```
 
-The full OpenAPI 3.1 contract is in [`api/openapi.yaml`](api/openapi.yaml). Service and worker runbooks, including their data flow diagrams, are indexed in [`docs/`](docs/README.md). Run the VitePress site with `make docs` and open `http://localhost:5181`.
+Site de documentação ficará em `http://localhost:5181`.
 
-Send the token as `Authorization: Bearer <API_TOKEN>`.
+## Licença
 
-| Method | Endpoint | Purpose |
-|---|---|---|
-| `GET` | `/v1/indices` | Browse the catalog; supports `group`, comma-separated `codes`, and `latest=true` |
-| `GET` | `/v1/indices/{code}/final` | Latest published point (or latest point per dimension) |
-| `GET` | `/v1/indices/{code}/series` | Ascending chart points; supports `from`, `to`, `last`, `dim`, `as_of`, and `resolution=raw\|weekly\|monthly` |
-| `PUT` | `/v1/indices/{code}/observations` | Idempotent manual import or correction; requires `Idempotency-Key` |
-| `POST` | `/v1/indices/sync/{source}` | Trigger `all`, `sgs`, `focus`, `tesouro`, `b3`, or `selic` |
-| `POST` | `/v1/operations/sync/{source}` | Alias for manually triggering a sync |
-| `GET` | `/v1/operations/sync-runs` | Read the sync ledger |
-
-Chart points have a compact `{ "x": "YYYY-MM-DD", "y": "decimal" }` shape, with optional `dimension`, `source`, and `attributes`. Database indexes support date-ordered lookups by series and dimension. Weekly and monthly resolutions retain the last observation in each period.
-
-The detailed Selic routes and CSV import are also retained under `/v1/selic`.
-
-## Catalog coverage
-
-The original catalog is retained: Selic target/effective/observed, CDI, DI curve, TJLP, NTN-B real yield, IPCA, IPCA-15, trailing IPCA 12-month, IGP-M, Focus IPCA/Selic/USD expectations, PTAX, Ibovespa, IDIV, IFIX, and IBC-Br. INPC and additional B3 market breadth and sector indexes have been added.
-
-New B3 series include IBrX 100/50, IBrA, Small Cap, MidLarge Cap, IFNC, ICON, IMAT, IMOB, UTIL, IEEX, INDX, IGCX, and IGCT. See the seeded catalog in `db/migrations/00001_indices.sql` for stable codes, units, dimensions, and source mappings.
-
-The DI curve remains in the catalog for compatibility with the source service. Its prior worker documented that the upstream metrics API did not publish DI curves, so this service does not claim to ingest that curve. NTN-B yields use the free Tesouro Transparente feed by default.
-
-## Sources and revisions
-
-- Banco Central SGS and Focus: public time-series and expectations APIs.
-- BCB NovoSelic: daily official observed-rate data, including statistical fields.
-- Tesouro Transparente: public Tesouro Direto rates CSV for real-yield observations.
-- B3: public official daily index-statistics feed for B3 index values.
-
-Each stored point is keyed by series, dimension, and reference date. Identical values are no-ops; corrected values create a new revision and retain the previous revision. Workers use PostgreSQL advisory locks and record source, outcome, range, and point counts in `index_sync_runs`.
-
-Relevant source references:
-
-- [BCB open data and SGS](https://dadosabertos.bcb.gov.br/)
-- [BCB market expectations](https://dadosabertos.bcb.gov.br/dataset/expectativas-mercado)
-- [B3 index statistics](https://sistemaswebb3-listados.b3.com.br/indexStatisticsPage/daily-evolution/IBOVESPA?language=pt-br)
-- [Tesouro Transparente dataset](https://www.tesourotransparente.gov.br/ckan/dataset/taxas-dos-titulos-ofertados-pelo-tesouro-direto)
+Este projeto está sob a licença [MIT](LICENSE), de JoseLArantes.

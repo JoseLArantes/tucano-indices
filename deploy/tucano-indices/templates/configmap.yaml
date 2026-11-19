@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tucano-indices.fullname" . }}
+  labels:
+    {{- include "tucano-indices.labels" . | nindent 4 }}
+data:
+  {{- toYaml .Values.config | nindent 2 }}

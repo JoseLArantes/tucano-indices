@@ -17,7 +17,9 @@ info:
   contact:
     name: Tucano Indices
   license:
-    name: Proprietary
+    name: MIT
+    identifier: MIT
+    url: https://opensource.org/license/mit/
 servers:
   - url: /
     description: Mesmo host desta instância

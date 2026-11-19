@@ -6,6 +6,7 @@ WORKDIR /src
 
 COPY go.mod go.sum ./
 RUN go mod download
+RUN go install github.com/pressly/goose/v3/cmd/goose@v3.30.1
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/server ./cmd/api
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o /out/index-sync ./cmd/index-sync
@@ -17,6 +18,8 @@ WORKDIR /app
 COPY --from=builder /out/server /app/server
 COPY --from=builder /out/index-sync /app/index-sync
 COPY --from=builder /out/scheduler /app/scheduler
+COPY --from=builder /go/bin/goose /app/goose
+COPY db/migrations /app/db/migrations
 COPY api/openapi.yaml /app/api/openapi.yaml
 USER appuser
 EXPOSE 8080

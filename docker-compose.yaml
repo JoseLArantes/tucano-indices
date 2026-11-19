@@ -6,6 +6,7 @@ services:
     volumes:
       - ./:/src
       - go_modules:/go/pkg/mod
+      - go_tools:/go/bin
     environment:
       GOTOOLCHAIN: local
 
@@ -118,4 +119,5 @@ services:
     command: sh -c "npm ci && npm run docs:dev"
 volumes:
   go_modules:
+  go_tools:
   docs_node_modules:

@@ -8,6 +8,8 @@ make docs
 
 O servidor fica em `http://localhost:5181`.
 
+No GitHub Pages, o workflow `.github/workflows/docs-pages.yml` publica o site após alterações em `docs/` mescladas na branch `main`. A URL do projeto é <https://joselarantes.github.io/tucano-indices/>. Para a primeira publicação, configure **Settings → Pages → Build and deployment → Source** como **GitHub Actions**.
+
 | Documento | Serviço / worker |
 |---|---|
 | [Introdução](introducao.md) | Visão geral, componentes e fluxo de dados. |

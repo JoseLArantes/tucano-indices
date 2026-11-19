@@ -1,0 +1,13 @@
+apiVersion: v2
+name: tucano-indices
+description: API e workers para gestão dos índices financeiros brasileiros
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - finance
+  - brazil
+  - indices
+home: https://github.com/joselarantes/tucano-indices
+sources:
+  - https://github.com/joselarantes/tucano-indices

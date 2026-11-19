@@ -1,0 +1,24 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "go",
+      "initial-version": "1.0.0",
+      "include-component-in-tag": false,
+      "prerelease": false,
+      "draft": false,
+      "extra-files": [
+        {
+          "type": "yaml",
+          "path": "deploy/tucano-indices/Chart.yaml",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "yaml",
+          "path": "deploy/tucano-indices/Chart.yaml",
+          "jsonpath": "$.appVersion"
+        }
+      ]
+    }
+  }
+}
